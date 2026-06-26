@@ -73,7 +73,7 @@ export function connectRelay(opts: ConnectRelayOptions): string {
     .join("");
   return doc(
     `<Connect>` +
-      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}">` +
+      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general">` +
       params +
       `</ConversationRelay>` +
       `</Connect>`,
