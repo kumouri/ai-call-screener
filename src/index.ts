@@ -98,10 +98,11 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
   const base = baseUrlOf(request, env);
   const sessionId = crypto.randomUUID();
   const owner = env.OWNER_NAME ?? "the owner";
+  const ownerSpoken = env.OWNER_NAME_SPOKEN ?? owner;
   return xml(
     connectRelay({
       wsUrl: `${wssOf(base)}/ws?s=${sessionId}`,
-      welcomeGreeting: MARGO.greeting(owner),
+      welcomeGreeting: MARGO.greeting(ownerSpoken),
       ttsProvider: MARGO.ttsProvider,
       voice: MARGO.voice,
       parameters: [

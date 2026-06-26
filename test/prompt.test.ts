@@ -14,6 +14,11 @@ describe("buildSystemPrompt", () => {
     expect(p).not.toContain("{owner}");
   });
 
+  it("adds a pronunciation note when a spoken name is given", () => {
+    const p = buildSystemPrompt("Ceryce", undefined, MARGO, "Cerise");
+    expect(p).toContain('write it as "Cerise"');
+  });
+
   it("injects the owner profile when provided", () => {
     const p = buildSystemPrompt("Ceryce", "is a software developer who wants recruiter calls");
     expect(p).toContain("About Ceryce:");

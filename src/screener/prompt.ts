@@ -16,16 +16,21 @@ export interface ToolSchema {
   };
 }
 
-export function buildSystemPrompt(ownerName: string, ownerProfile?: string, persona?: Persona): string {
+export function buildSystemPrompt(ownerName: string, ownerProfile?: string, persona?: Persona, spokenName?: string): string {
   const identity =
     persona !== undefined
       ? persona.demeanor.replaceAll("{owner}", ownerName)
       : `You are a warm, efficient phone call screener for ${ownerName}.`;
   const profile = ownerProfile !== undefined && ownerProfile.trim() !== "" ? `About ${ownerName}: ${ownerProfile.trim()}` : "";
+  const pronounce =
+    spokenName !== undefined && spokenName.trim() !== "" && spokenName !== ownerName
+      ? `When you say ${ownerName}'s name aloud, write it as "${spokenName}" so it is pronounced correctly.`
+      : "";
   return [
     identity,
     `You are screening an unknown caller who just pressed 1 to reach ${ownerName}.`,
     profile,
+    pronounce,
     `Greet them in character and find out who they are and why they're calling, in as few turns as possible — warm and human, never an interrogation. Don't make promises on ${ownerName}'s behalf.`,
     `Use what you know about ${ownerName} to judge the call, then call exactly one tool:`,
     `- connect_call: someone ${ownerName} would want to talk to now (for example a recruiter about a software role, or a genuine personal or appointment call).`,

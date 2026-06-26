@@ -25,6 +25,8 @@ export interface Env {
   REPUTATION_LOOKUP_ENABLED: string;
   DAILY_BUDGET_USD: string;
   OWNER_NAME?: string;
+  /** Phonetic spelling of the owner's name for TTS (e.g. "Cerise" for "Ceryce"). */
+  OWNER_NAME_SPOKEN?: string;
   /** Free-text description of the owner + who to put through vs. block. */
   OWNER_PROFILE?: string;
 }

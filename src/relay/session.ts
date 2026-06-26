@@ -43,7 +43,7 @@ export class RelaySession {
   constructor(_state: DurableObjectState, env: Env) {
     this.env = env;
     this.client = createAnthropicClient({ apiKey: env.ANTHROPIC_API_KEY, model: MODEL });
-    this.system = buildSystemPrompt(env.OWNER_NAME ?? "the owner", env.OWNER_PROFILE, MARGO);
+    this.system = buildSystemPrompt(env.OWNER_NAME ?? "the owner", env.OWNER_PROFILE, MARGO, env.OWNER_NAME_SPOKEN);
   }
 
   async fetch(request: Request): Promise<Response> {
