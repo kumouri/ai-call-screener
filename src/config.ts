@@ -29,6 +29,10 @@ export interface Env {
   OWNER_NAME_SPOKEN?: string;
   /** Free-text description of the owner + who to put through vs. block. */
   OWNER_PROFILE?: string;
+  /** Optional shared password for owner recognition (a running easter egg until set). */
+  OWNER_PASSWORD?: string;
+  /** Bearer secret the Google Contacts sync (Apps Script) must present to POST /sync-contacts. */
+  CONTACTS_SYNC_SECRET?: string;
 }
 
 export function settingsFromEnv(env: Env): ScreenerSettings {

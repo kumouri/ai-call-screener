@@ -19,6 +19,14 @@ describe("buildSystemPrompt", () => {
     expect(p).toContain('write it as "Cerise"');
   });
 
+  it("challenges a caller who seems to be the owner for a password", () => {
+    expect(buildSystemPrompt("Ceryce", undefined, MARGO).toLowerCase()).toContain("password");
+  });
+
+  it("embeds the configured password when one is set", () => {
+    expect(buildSystemPrompt("Ceryce", undefined, MARGO, "Cerise", "swordfish")).toContain("swordfish");
+  });
+
   it("injects the owner profile when provided", () => {
     const p = buildSystemPrompt("Ceryce", "is a software developer who wants recruiter calls");
     expect(p).toContain("About Ceryce:");

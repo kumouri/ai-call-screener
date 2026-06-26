@@ -72,3 +72,63 @@ export async function loadSettingsRow(_db: D1Database): Promise<Partial<Screener
   // TODO(M3/M5): read overrides from the `settings` table.
   return {};
 }
+
+export interface GoogleContact {
+  numberE164: string;
+  name: string;
+}
+
+/**
+ * Pure reconcile step: given the Google-sourced numbers already in D1 and the
+ * freshly-pushed contacts, decide what to upsert and which stale Google numbers
+ * to remove. Blanks and duplicates are dropped. (manual entries aren't touched.)
+ */
+export function reconcileContacts(
+  existingGoogleNumbers: ReadonlySet<string>,
+  incoming: ReadonlyArray<GoogleContact>,
+): { toUpsert: GoogleContact[]; toRemove: string[] } {
+  const seen = new Set<string>();
+  const toUpsert: GoogleContact[] = [];
+  for (const c of incoming) {
+    if (c.numberE164 !== "" && !seen.has(c.numberE164)) {
+      seen.add(c.numberE164);
+      toUpsert.push(c);
+    }
+  }
+  const toRemove: string[] = [];
+  for (const num of existingGoogleNumbers) {
+    if (!seen.has(num)) toRemove.push(num);
+  }
+  return { toUpsert, toRemove };
+}
+
+/**
+ * Replace the Google-sourced slice of the allowlist with `contacts`. Upserts are
+ * tagged source='google'; numbers no longer in Google are dropped. Entries added
+ * by hand (source='manual') are preserved — the upsert's WHERE guard won't
+ * overwrite them, and removal only targets source='google'.
+ */
+export async function syncGoogleContacts(
+  db: D1Database,
+  contacts: ReadonlyArray<GoogleContact>,
+): Promise<{ upserted: number; removed: number }> {
+  const existing = await db.prepare("SELECT number_e164 FROM contacts WHERE source = 'google'").all<{ number_e164: string }>();
+  const existingNumbers = new Set((existing.results ?? []).map((r) => r.number_e164));
+  const { toUpsert, toRemove } = reconcileContacts(existingNumbers, contacts);
+  const now = new Date().toISOString();
+
+  const stmts: D1PreparedStatement[] = [
+    ...toUpsert.map((c) =>
+      db
+        .prepare(
+          `INSERT INTO contacts (number_e164, name, source, created_at)
+           VALUES (?1, ?2, 'google', ?3)
+           ON CONFLICT(number_e164) DO UPDATE SET name = ?2, source = 'google' WHERE source = 'google'`,
+        )
+        .bind(c.numberE164, c.name, now),
+    ),
+    ...toRemove.map((num) => db.prepare("DELETE FROM contacts WHERE number_e164 = ?1 AND source = 'google'").bind(num)),
+  ];
+  if (stmts.length > 0) await db.batch(stmts);
+  return { upserted: toUpsert.length, removed: toRemove.length };
+}
