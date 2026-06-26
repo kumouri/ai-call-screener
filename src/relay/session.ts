@@ -36,6 +36,7 @@ export class RelaySession {
   private callSid = "";
   private fromE164 = "";
   private toE164 = "";
+  private base = "";
   private startedAtMs = 0;
   private history: LlmTurn[] = [];
   private done = false;
@@ -71,6 +72,7 @@ export class RelaySession {
         const params = setup.customParameters ?? {};
         this.fromE164 = pick(params["from"], setup.from);
         this.toE164 = pick(params["to"], setup.to);
+        this.base = pick(params["base"], undefined);
         this.startedAtMs = Date.now();
         console.log(`setup: callSid=${this.callSid} from=${this.fromE164} to=${this.toE164}`);
         return;
@@ -113,7 +115,8 @@ export class RelaySession {
 
     try {
       if (terminal.kind === "connect") {
-        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164);
+        await this.alertConnecting(terminal.callerName, terminal.reason);
+        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164, this.base);
         await recordCall(this.env.DB, {
           id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
           outcomeStage: "conversation", verdict: "bridged",
@@ -142,6 +145,17 @@ export class RelaySession {
       await this.notifyOwner({ verdict: "spam", reason: terminal.reason, cost });
     } catch (err) {
       console.log(`handleTerminal error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** Real-time "pick up!" text so the owner knows who's being transferred to them. */
+  private async alertConnecting(callerName: string, reason: string): Promise<void> {
+    const who = callerName.trim() !== "" ? callerName.trim() : "a caller";
+    const body = reason.trim() !== "" ? `📞 Connecting ${who} — ${reason.trim()}. Pick up!` : `📞 Connecting ${who}. Pick up!`;
+    try {
+      await sendSms(this.env, this.env.USER_CELL_E164, body);
+    } catch {
+      // best-effort — don't fail the transfer on an SMS hiccup
     }
   }
 

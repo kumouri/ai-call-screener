@@ -8,6 +8,12 @@ describe("twiml builders", () => {
     );
   });
 
+  it("dial supports a ring timeout and a no-answer fallback", () => {
+    const x = dial("+14155550100", "+14155550111", { timeoutSec: 18, fallbackMessage: "try later" });
+    expect(x).toContain('<Dial timeout="18" callerId="+14155550111">+14155550100</Dial>');
+    expect(x).toContain("<Say>try later</Say><Hangup />");
+  });
+
   it("reject declines without answering", () => {
     expect(reject()).toContain('<Reject reason="rejected" />');
   });
