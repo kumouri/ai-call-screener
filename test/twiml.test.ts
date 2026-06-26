@@ -26,6 +26,16 @@ describe("twiml builders", () => {
     expect(x).toContain('welcomeGreeting="hi"');
   });
 
+  it("connectRelay passes custom parameters through to setup", () => {
+    const x = connectRelay({
+      wsUrl: "wss://host/ws",
+      welcomeGreeting: "hi",
+      parameters: [{ name: "from", value: "+15551234567" }],
+    });
+    expect(x).toContain('<Parameter name="from" value="+15551234567" />');
+    expect(x).toContain("</ConversationRelay>");
+  });
+
   it("escapes XML-special characters in dynamic text", () => {
     expect(escapeXml(`a&b<c>"'`)).toBe("a&amp;b&lt;c&gt;&quot;&apos;");
     expect(say("Tom & Jerry")).toContain("Tom &amp; Jerry");

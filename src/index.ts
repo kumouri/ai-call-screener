@@ -6,6 +6,10 @@
  *                 ConversationRelay; anything else => hang up (robodialer).
  *   GET  /ws    — ConversationRelay WebSocket, handed to the RelaySession DO.
  *   GET  /status— liveness + effective settings (expanded into a dashboard in M5).
+ *
+ * The public base URL is taken from PUBLIC_BASE_URL when set, otherwise derived
+ * from the incoming request — so it works behind a dev tunnel or a deployed
+ * Worker without extra config.
  */
 import type { Env } from "./config";
 import { settingsFromEnv } from "./config";
@@ -39,8 +43,13 @@ function field(form: FormData, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
-function wssBase(env: Env): string {
-  return env.PUBLIC_BASE_URL.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
+function baseUrlOf(request: Request, env: Env): string {
+  const p = env.PUBLIC_BASE_URL;
+  return p ? p : new URL(request.url).origin;
+}
+
+function wssOf(base: string): string {
+  return base.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 }
 
 async function handleVoice(request: Request, env: Env): Promise<Response> {
@@ -60,13 +69,15 @@ async function handleVoice(request: Request, env: Env): Promise<Response> {
       return xml(reject());
     default:
       // "gate" (and any fallthrough) -> cheap press-1 challenge.
-      return xml(gate({ prompt: settings.gatePrompt, actionUrl: `${env.PUBLIC_BASE_URL}/gate` }));
+      return xml(gate({ prompt: settings.gatePrompt, actionUrl: `${baseUrlOf(request, env)}/gate` }));
   }
 }
 
 async function handleGate(request: Request, env: Env): Promise<Response> {
   const form = await request.formData();
   const digits = field(form, "Digits");
+  const from = field(form, "From");
+  const to = field(form, "To");
   const settings = settingsFromEnv(env);
 
   if (digits !== "1") {
@@ -79,10 +90,18 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
   if (post.stage === "allow") {
     return xml(dial(settings.userCellE164, env.TWILIO_NUMBER_E164));
   }
+
+  // Hand to Claude. Pass the caller/callee numbers through so the Durable
+  // Object can log, blocklist, and transfer without another lookup.
+  const base = baseUrlOf(request, env);
   return xml(
     connectRelay({
-      wsUrl: `${wssBase(env)}/ws`,
+      wsUrl: `${wssOf(base)}/ws`,
       welcomeGreeting: "Hi, you've reached a call screener. May I ask who's calling and what it's about?",
+      parameters: [
+        { name: "from", value: from },
+        { name: "to", value: to },
+      ],
     }),
   );
 }
@@ -91,8 +110,6 @@ async function handleWs(request: Request, env: Env): Promise<Response> {
   if (request.headers.get("Upgrade") !== "websocket") {
     return new Response("expected websocket upgrade", { status: 426 });
   }
-  // One session per call is fine for personal use; a unique name per CallSid
-  // can be introduced later if concurrency grows.
   const id = env.RELAY_SESSION.idFromName("active-call");
   return env.RELAY_SESSION.get(id).fetch(request);
 }

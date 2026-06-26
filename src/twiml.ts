@@ -62,13 +62,20 @@ export interface ConnectRelayOptions {
   /** wss:// URL of our ConversationRelay WebSocket (the Durable Object). */
   wsUrl: string;
   welcomeGreeting: string;
+  /** Custom parameters surfaced to us in the ConversationRelay `setup` frame. */
+  parameters?: Array<{ name: string; value: string }>;
 }
 
 /** Hand the answered call to Twilio ConversationRelay (the paid Claude stage). */
 export function connectRelay(opts: ConnectRelayOptions): string {
+  const params = (opts.parameters ?? [])
+    .map((p) => `<Parameter name="${escapeXml(p.name)}" value="${escapeXml(p.value)}" />`)
+    .join("");
   return doc(
     `<Connect>` +
-      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" />` +
+      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}">` +
+      params +
+      `</ConversationRelay>` +
       `</Connect>`,
   );
 }
