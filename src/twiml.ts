@@ -20,9 +20,19 @@ function doc(body: string): string {
   return `${XML_DECL}<Response>${body}</Response>`;
 }
 
-/** Bridge the call to a number (used for allowlisted contacts and connect). */
-export function dial(toE164: string, callerIdE164: string): string {
-  return doc(`<Dial callerId="${escapeXml(callerIdE164)}">${escapeXml(toE164)}</Dial>`);
+export interface DialOptions {
+  /** Ring time before giving up. Keep this BELOW the cell's no-answer-forward
+   *  timer so a missed bridge can't be re-forwarded into a loop. */
+  timeoutSec?: number;
+  /** Spoken to the caller if the dial isn't answered in time, then hang up. */
+  fallbackMessage?: string;
+}
+
+/** Bridge the call to a number (used for allowlisted contacts and live transfer). */
+export function dial(toE164: string, callerIdE164: string, opts: DialOptions = {}): string {
+  const timeout = opts.timeoutSec !== undefined ? ` timeout="${opts.timeoutSec}"` : "";
+  const fallback = opts.fallbackMessage !== undefined ? `<Say>${escapeXml(opts.fallbackMessage)}</Say><Hangup />` : "";
+  return doc(`<Dial${timeout} callerId="${escapeXml(callerIdE164)}">${escapeXml(toE164)}</Dial>${fallback}`);
 }
 
 /** Decline the call *without answering it* — Twilio does not bill rejected calls. */
