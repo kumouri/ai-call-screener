@@ -15,6 +15,8 @@ export interface SetupMessage {
   callSid: string;
   from?: string;
   to?: string;
+  /** Values from the <Parameter> tags we put on <ConversationRelay>. */
+  customParameters?: Record<string, string>;
 }
 
 export interface PromptMessage {
