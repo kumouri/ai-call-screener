@@ -9,6 +9,15 @@ node_modules/
 dist/
 coverage/
 
+# android build artifacts (the app source lives in android/; build output does not)
+android/**/build/
+android/**/.gradle/
+android/**/.idea/
+android/**/local.properties
+android/**/*.apk
+android/**/*.keystore
+android/**/*.jks
+
 # os / editor
 .DS_Store
 Thumbs.db
