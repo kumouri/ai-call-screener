@@ -15,7 +15,7 @@ import type { Env } from "./config";
 import { settingsFromEnv } from "./config";
 import type { CallerInfo } from "./screener/decision";
 import { decideFunnel, decidePostGate } from "./screener/funnel";
-import { lookupLists } from "./data/db";
+import { lookupLists, syncGoogleContacts, type GoogleContact } from "./data/db";
 import { connectRelay, dial, gate, reject, say } from "./twiml";
 import { MARGO } from "./persona";
 
@@ -30,6 +30,7 @@ export default {
     if (method === "POST" && pathname === "/gate") return handleGate(request, env);
     if (pathname === "/ws") return handleWs(request, env);
     if (method === "GET" && pathname === "/status") return handleStatus(env);
+    if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
 
     return new Response("not found", { status: 404 });
   },
@@ -132,4 +133,33 @@ function handleStatus(env: Env): Response {
     dailyBudgetUsd: settings.dailyBudgetUsd,
   });
   return new Response(body, { headers: { "Content-Type": "application/json" } });
+}
+
+/** Google Contacts sync push from the owner's Apps Script (see docs/contacts-sync.md). */
+async function handleSyncContacts(request: Request, env: Env): Promise<Response> {
+  const secret = env.CONTACTS_SYNC_SECRET;
+  if (secret === undefined || secret === "" || request.headers.get("Authorization") !== `Bearer ${secret}`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const result = await syncGoogleContacts(env.DB, parseContacts(body));
+  return new Response(JSON.stringify({ ok: true, ...result }), { headers: { "Content-Type": "application/json" } });
+}
+
+function parseContacts(body: unknown): GoogleContact[] {
+  const arr = typeof body === "object" && body !== null ? (body as { contacts?: unknown }).contacts : undefined;
+  if (!Array.isArray(arr)) return [];
+  const out: GoogleContact[] = [];
+  for (const item of arr) {
+    if (typeof item !== "object" || item === null) continue;
+    const numberE164 = typeof (item as { numberE164?: unknown }).numberE164 === "string" ? (item as { numberE164: string }).numberE164 : "";
+    const name = typeof (item as { name?: unknown }).name === "string" ? (item as { name: string }).name : "";
+    if (numberE164.startsWith("+")) out.push({ numberE164, name });
+  }
+  return out;
 }
