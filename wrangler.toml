@@ -21,7 +21,7 @@ new_sqlite_classes = ["RelaySession"]
 [[d1_databases]]
 binding = "DB"
 database_name = "call_screener"
-database_id = "PLACEHOLDER_SET_DURING_PROVISIONING"
+database_id = "9156599a-b1a4-4a08-bead-cf1a0e3f5f51"
 
 [vars]
 GATE_PROMPT = "Thanks for calling. To cut down on spam, please press 1 to be connected."

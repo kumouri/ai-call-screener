@@ -91,12 +91,14 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
     return xml(dial(settings.userCellE164, env.TWILIO_NUMBER_E164));
   }
 
-  // Hand to Claude. Pass the caller/callee numbers through so the Durable
-  // Object can log, blocklist, and transfer without another lookup.
+  // Hand to Claude. A per-call session id isolates this call's Durable Object
+  // instance; the caller/callee numbers are passed through so the DO can log,
+  // blocklist, and transfer without another lookup.
   const base = baseUrlOf(request, env);
+  const sessionId = crypto.randomUUID();
   return xml(
     connectRelay({
-      wsUrl: `${wssOf(base)}/ws`,
+      wsUrl: `${wssOf(base)}/ws?s=${sessionId}`,
       welcomeGreeting: "Hi, you've reached a call screener. May I ask who's calling and what it's about?",
       parameters: [
         { name: "from", value: from },
@@ -110,7 +112,8 @@ async function handleWs(request: Request, env: Env): Promise<Response> {
   if (request.headers.get("Upgrade") !== "websocket") {
     return new Response("expected websocket upgrade", { status: 426 });
   }
-  const id = env.RELAY_SESSION.idFromName("active-call");
+  const session = new URL(request.url).searchParams.get("s") ?? "active-call";
+  const id = env.RELAY_SESSION.idFromName(session);
   return env.RELAY_SESSION.get(id).fetch(request);
 }
 
