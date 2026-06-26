@@ -36,6 +36,7 @@ export class RelaySession {
   private callSid = "";
   private fromE164 = "";
   private toE164 = "";
+  private base = "";
   private startedAtMs = 0;
   private history: LlmTurn[] = [];
   private done = false;
@@ -71,6 +72,7 @@ export class RelaySession {
         const params = setup.customParameters ?? {};
         this.fromE164 = pick(params["from"], setup.from);
         this.toE164 = pick(params["to"], setup.to);
+        this.base = pick(params["base"], undefined);
         this.startedAtMs = Date.now();
         console.log(`setup: callSid=${this.callSid} from=${this.fromE164} to=${this.toE164}`);
         return;
@@ -114,7 +116,7 @@ export class RelaySession {
     try {
       if (terminal.kind === "connect") {
         await this.alertConnecting(terminal.callerName, terminal.reason);
-        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164);
+        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164, this.base);
         await recordCall(this.env.DB, {
           id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
           outcomeStage: "conversation", verdict: "bridged",

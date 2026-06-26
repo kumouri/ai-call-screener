@@ -30,15 +30,16 @@ async function updateCallTwiml(env: Env, callSid: string, twiml: string): Promis
  * Bridge the live call to the owner's cell (ends ConversationRelay). The 18s
  * ring window is deliberately shorter than the cell's no-answer-forward timer
  * (~25s) so a missed bridge times out here instead of looping back through the
- * forward; on no-answer the caller hears a brief line and we hang up.
+ * forward. When the dial ends, Twilio POSTs the result to `${baseUrl}/after-bridge`,
+ * which connects-or-voicemails based on whether the owner answered.
  */
-export async function redirectToDial(env: Env, callSid: string, toE164: string): Promise<void> {
+export async function redirectToDial(env: Env, callSid: string, toE164: string, baseUrl: string): Promise<void> {
   await updateCallTwiml(
     env,
     callSid,
     dial(toE164, env.TWILIO_NUMBER_E164, {
       timeoutSec: 18,
-      fallbackMessage: "Sorry, I couldn't reach them right now. Please try again later. Goodbye.",
+      actionUrl: `${baseUrl}/after-bridge`,
     }),
   );
 }

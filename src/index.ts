@@ -16,7 +16,8 @@ import { settingsFromEnv } from "./config";
 import type { CallerInfo } from "./screener/decision";
 import { decideFunnel, decidePostGate } from "./screener/funnel";
 import { lookupLists, syncGoogleContacts, type GoogleContact } from "./data/db";
-import { connectRelay, dial, gate, reject, say } from "./twiml";
+import { connectRelay, dial, gate, hangupResponse, reject, say, voicemail } from "./twiml";
+import { sendSms } from "./notify/sms";
 import { MARGO } from "./persona";
 
 export { RelaySession } from "./relay/session";
@@ -31,6 +32,8 @@ export default {
     if (pathname === "/ws") return handleWs(request, env);
     if (method === "GET" && pathname === "/status") return handleStatus(env);
     if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
+    if (method === "POST" && pathname === "/after-bridge") return handleAfterBridge(request, env);
+    if (method === "POST" && pathname === "/voicemail") return handleVoicemail(request, env);
 
     return new Response("not found", { status: 404 });
   },
@@ -110,6 +113,7 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
       parameters: [
         { name: "from", value: from },
         { name: "to", value: to },
+        { name: "base", value: base },
       ],
     }),
   );
@@ -162,4 +166,34 @@ function parseContacts(body: unknown): GoogleContact[] {
     if (numberE164.startsWith("+")) out.push({ numberE164, name });
   }
   return out;
+}
+
+/** After a live-transfer dial ends: hang up if it connected, else roll to voicemail. */
+async function handleAfterBridge(request: Request, env: Env): Promise<Response> {
+  const form = await request.formData();
+  if (field(form, "DialCallStatus") === "completed") return xml(hangupResponse());
+  const from = field(form, "From");
+  const owner = env.OWNER_NAME_SPOKEN ?? env.OWNER_NAME ?? "They";
+  return xml(
+    voicemail({
+      prompt: `${owner} isn't available right now. Please leave a message after the tone.`,
+      transcribeCallbackUrl: `${baseUrlOf(request, env)}/voicemail?from=${encodeURIComponent(from)}`,
+    }),
+  );
+}
+
+/** Twilio transcription callback for a voicemail: text it to the owner. */
+async function handleVoicemail(request: Request, env: Env): Promise<Response> {
+  const from = new URL(request.url).searchParams.get("from") ?? "";
+  const form = await request.formData();
+  const text = field(form, "TranscriptionText");
+  const recordingUrl = field(form, "RecordingUrl");
+  const who = from !== "" ? from : "Unknown caller";
+  const body = `🎙️ Voicemail from ${who}:\n${text !== "" ? text : "(couldn't transcribe — listen via Twilio)"}\n${recordingUrl}`;
+  try {
+    await sendSms(env, env.USER_CELL_E164, body);
+  } catch {
+    // best-effort
+  }
+  return new Response("ok");
 }
