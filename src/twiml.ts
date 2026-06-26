@@ -64,6 +64,9 @@ export interface ConnectRelayOptions {
   welcomeGreeting: string;
   /** Custom parameters surfaced to us in the ConversationRelay `setup` frame. */
   parameters?: Array<{ name: string; value: string }>;
+  /** Persona TTS provider + voice (e.g. "Amazon" / "Joanna-Neural"). */
+  ttsProvider?: string;
+  voice?: string;
 }
 
 /** Hand the answered call to Twilio ConversationRelay (the paid Claude stage). */
@@ -71,9 +74,11 @@ export function connectRelay(opts: ConnectRelayOptions): string {
   const params = (opts.parameters ?? [])
     .map((p) => `<Parameter name="${escapeXml(p.name)}" value="${escapeXml(p.value)}" />`)
     .join("");
+  const tts = opts.ttsProvider !== undefined ? ` ttsProvider="${escapeXml(opts.ttsProvider)}"` : "";
+  const voice = opts.voice !== undefined ? ` voice="${escapeXml(opts.voice)}"` : "";
   return doc(
     `<Connect>` +
-      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general">` +
+      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general"${tts}${voice}>` +
       params +
       `</ConversationRelay>` +
       `</Connect>`,

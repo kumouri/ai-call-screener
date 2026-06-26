@@ -36,6 +36,12 @@ describe("twiml builders", () => {
     expect(x).toContain("</ConversationRelay>");
   });
 
+  it("connectRelay sets the persona TTS voice when provided", () => {
+    const x = connectRelay({ wsUrl: "wss://h/ws", welcomeGreeting: "hi", ttsProvider: "Amazon", voice: "Joanna-Neural" });
+    expect(x).toContain('ttsProvider="Amazon"');
+    expect(x).toContain('voice="Joanna-Neural"');
+  });
+
   it("escapes XML-special characters in dynamic text", () => {
     expect(escapeXml(`a&b<c>"'`)).toBe("a&amp;b&lt;c&gt;&quot;&apos;");
     expect(say("Tom & Jerry")).toContain("Tom &amp; Jerry");

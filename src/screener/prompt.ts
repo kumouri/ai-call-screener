@@ -3,6 +3,7 @@
  * plain data (no SDK import) so it is host-agnostic and unit-testable. The
  * Durable Object wires these into the Anthropic API in M2.
  */
+import type { Persona } from "../persona";
 
 /** Anthropic tool schema shape (a subset, enough for our three tools). */
 export interface ToolSchema {
@@ -15,12 +16,17 @@ export interface ToolSchema {
   };
 }
 
-export function buildSystemPrompt(ownerName: string, ownerProfile?: string): string {
+export function buildSystemPrompt(ownerName: string, ownerProfile?: string, persona?: Persona): string {
+  const identity =
+    persona !== undefined
+      ? persona.demeanor.replaceAll("{owner}", ownerName)
+      : `You are a warm, efficient phone call screener for ${ownerName}.`;
   const profile = ownerProfile !== undefined && ownerProfile.trim() !== "" ? `About ${ownerName}: ${ownerProfile.trim()}` : "";
   return [
-    `You are a warm, efficient phone call screener for ${ownerName}.`,
+    identity,
+    `You are screening an unknown caller who just pressed 1 to reach ${ownerName}.`,
     profile,
-    `An unknown caller just pressed 1 to reach ${ownerName}. Greet them warmly and find out who they are and why they're calling, in as few turns as possible. Sound friendly and human — not like an interrogation. Don't make promises on ${ownerName}'s behalf.`,
+    `Greet them in character and find out who they are and why they're calling, in as few turns as possible — warm and human, never an interrogation. Don't make promises on ${ownerName}'s behalf.`,
     `Use what you know about ${ownerName} to judge the call, then call exactly one tool:`,
     `- connect_call: someone ${ownerName} would want to talk to now (for example a recruiter about a software role, or a genuine personal or appointment call).`,
     `- take_message: legitimate but it can wait, or you're genuinely unsure — capture a concise message.`,
