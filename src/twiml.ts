@@ -67,6 +67,8 @@ export interface ConnectRelayOptions {
   /** Persona TTS provider + voice (e.g. "Amazon" / "Joanna-Neural"). */
   ttsProvider?: string;
   voice?: string;
+  /** Comma-separated STT vocabulary hints (e.g. the owner's name) to boost recognition. */
+  hints?: string;
 }
 
 /** Hand the answered call to Twilio ConversationRelay (the paid Claude stage). */
@@ -76,9 +78,10 @@ export function connectRelay(opts: ConnectRelayOptions): string {
     .join("");
   const tts = opts.ttsProvider !== undefined ? ` ttsProvider="${escapeXml(opts.ttsProvider)}"` : "";
   const voice = opts.voice !== undefined ? ` voice="${escapeXml(opts.voice)}"` : "";
+  const hints = opts.hints !== undefined ? ` hints="${escapeXml(opts.hints)}"` : "";
   return doc(
     `<Connect>` +
-      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general"${tts}${voice}>` +
+      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general"${hints}${tts}${voice}>` +
       params +
       `</ConversationRelay>` +
       `</Connect>`,

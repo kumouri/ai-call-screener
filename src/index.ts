@@ -105,6 +105,7 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
       welcomeGreeting: MARGO.greeting(ownerSpoken),
       ttsProvider: MARGO.ttsProvider,
       voice: MARGO.voice,
+      hints: [owner, ownerSpoken].join(", "),
       parameters: [
         { name: "from", value: from },
         { name: "to", value: to },
