@@ -78,6 +78,12 @@ export interface GoogleContact {
   name: string;
 }
 
+/** All blocklisted numbers, for the on-device blocker app to sync. */
+export async function listBlocklist(db: D1Database): Promise<string[]> {
+  const res = await db.prepare("SELECT number_e164 FROM blocklist ORDER BY number_e164").all<{ number_e164: string }>();
+  return (res.results ?? []).map((r) => r.number_e164);
+}
+
 /**
  * Pure reconcile step: given the Google-sourced numbers already in D1 and the
  * freshly-pushed contacts, decide what to upsert and which stale Google numbers

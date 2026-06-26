@@ -33,6 +33,8 @@ export interface Env {
   OWNER_PASSWORD?: string;
   /** Bearer secret the Google Contacts sync (Apps Script) must present to POST /sync-contacts. */
   CONTACTS_SYNC_SECRET?: string;
+  /** Bearer secret the on-device blocker app must present to GET /blocklist. */
+  BLOCKLIST_SYNC_SECRET?: string;
 }
 
 export function settingsFromEnv(env: Env): ScreenerSettings {
