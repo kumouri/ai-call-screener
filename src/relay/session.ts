@@ -2,14 +2,15 @@
  * RelaySession — the Durable Object that holds one ConversationRelay WebSocket
  * (Twilio <-> us) and the conversation state for a single screened call.
  *
- * Loop: caller speech -> Claude (turn engine) -> spoken reply, until Claude
- * reaches a terminal decision. Terminal effects use the Twilio REST API to
- * redirect the *live* call (bridge to the owner, or speak-and-hang-up), then
- * persist the verdict to D1 and text the owner.
+ * IMPORTANT: this uses the *non-hibernating* WebSocket API (`server.accept()`),
+ * not `state.acceptWebSocket()`. Hibernation evicts the instance between
+ * messages, which would reset `callSid` and `history` every turn — breaking
+ * both call transfer (empty callSid) and conversation continuity. Calls are
+ * short, so keeping the DO in memory for the call's duration is the right trade.
  *
- * NOTE: the conversational loop + terminal effects are wired but only proven by
- * a real call (M2 live verification). The pure pieces they call (turn engine,
- * SMS formatting, cost, response parsing) are unit-tested.
+ * Loop: caller speech -> Claude (turn engine) -> spoken reply, until Claude
+ * reaches a terminal decision, which transfers the live call (REST), persists
+ * the verdict to D1, and texts the owner.
  */
 import type { Env } from "../config";
 import type { SetupMessage } from "./protocol";
@@ -25,10 +26,9 @@ import { formatVerdictSms } from "../notify/format";
 import { redirectToDial, redirectToHangup } from "../twilio/calls";
 
 const MODEL = "claude-haiku-4-5-20251001"; // Haiku 4.5: fast + cheap for real-time turns
-const MAX_TURNS = 4; // hard cap so a stalling caller can't run up minutes
+const MAX_TURNS = 6; // hard cap so a stalling caller can't run up minutes
 
 export class RelaySession {
-  private readonly state: DurableObjectState;
   private readonly env: Env;
   private readonly client: LlmClient;
   private readonly system: string;
@@ -37,12 +37,12 @@ export class RelaySession {
   private toE164 = "";
   private startedAtMs = 0;
   private history: LlmTurn[] = [];
+  private done = false;
 
-  constructor(state: DurableObjectState, env: Env) {
-    this.state = state;
+  constructor(_state: DurableObjectState, env: Env) {
     this.env = env;
     this.client = createAnthropicClient({ apiKey: env.ANTHROPIC_API_KEY, model: MODEL });
-    this.system = buildSystemPrompt(env.OWNER_NAME ?? "the owner");
+    this.system = buildSystemPrompt(env.OWNER_NAME ?? "the owner", env.OWNER_PROFILE);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -52,44 +52,56 @@ export class RelaySession {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    this.state.acceptWebSocket(server);
+    server.accept(); // non-hibernating: instance stays in memory for the call
+    server.addEventListener("message", (event: MessageEvent) => {
+      void this.onMessage(server, event.data);
+    });
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
-    const msg = parseInbound(raw);
+  private async onMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
+    try {
+      const raw = typeof data === "string" ? data : new TextDecoder().decode(data);
+      const msg = parseInbound(raw);
 
-    switch (msg.type) {
-      case "setup": {
+      if (msg.type === "setup") {
         const setup = msg as SetupMessage;
         this.callSid = typeof setup.callSid === "string" ? setup.callSid : "";
         const params = setup.customParameters ?? {};
-        this.fromE164 = pick(params.from, setup.from);
-        this.toE164 = pick(params.to, setup.to);
+        this.fromE164 = pick(params["from"], setup.from);
+        this.toE164 = pick(params["to"], setup.to);
         this.startedAtMs = Date.now();
-        break;
+        console.log(`setup: callSid=${this.callSid} from=${this.fromE164} to=${this.toE164}`);
+        return;
       }
-      case "prompt": {
+
+      if (msg.type === "prompt") {
+        if (this.done) return;
         const voicePrompt = typeof (msg as { voicePrompt?: unknown }).voicePrompt === "string" ? (msg as { voicePrompt: string }).voicePrompt : "";
+        console.log(`prompt: "${voicePrompt}"`);
         const outcome = await runCallerTurn(this.client, this.system, SCREENER_TOOLS, this.history, voicePrompt, MAX_TURNS);
         this.history = outcome.history;
         if (outcome.terminal !== undefined) {
+          console.log(`decision: ${outcome.terminal.kind}`);
+          this.done = true;
           await this.handleTerminal(outcome.terminal);
         } else if (outcome.reply !== undefined) {
+          console.log(`reply: "${outcome.reply}"`);
           ws.send(JSON.stringify(textToken(outcome.reply, true)));
         }
-        break;
+        return;
       }
-      case "interrupt":
-        // TODO(M2 live): cancel any in-flight generation for barge-in.
-        break;
-      default:
-        break;
+      // interrupt / other frames: ignore
+    } catch (err) {
+      console.log(`onMessage error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   private async handleTerminal(terminal: TerminalAction): Promise<void> {
+    if (this.callSid === "") {
+      console.log("handleTerminal: missing callSid — cannot transfer/hang up");
+      return;
+    }
     const id = crypto.randomUUID();
     const started = this.startedAtMs > 0 ? this.startedAtMs : Date.now();
     const startedAt = new Date(started).toISOString();
@@ -98,36 +110,38 @@ export class RelaySession {
     const cost = estimateCallCost("converse", elapsedSec);
     const transcript = this.history.map((t) => `${t.role}: ${t.content}`).join("\n");
 
-    if (terminal.kind === "connect") {
-      await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164);
+    try {
+      if (terminal.kind === "connect") {
+        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164);
+        await recordCall(this.env.DB, {
+          id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
+          outcomeStage: "conversation", verdict: "bridged",
+          callerName: terminal.callerName, reason: terminal.reason, transcript, costEstimateUsd: cost,
+        });
+        return;
+      }
+      if (terminal.kind === "message") {
+        await redirectToHangup(this.env, this.callSid, "Thanks — I'll pass your message along. Goodbye.");
+        await recordCall(this.env.DB, {
+          id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
+          outcomeStage: "conversation", verdict: "message",
+          callerName: terminal.callerName, reason: terminal.summary, transcript, costEstimateUsd: cost,
+        });
+        await this.notifyOwner({ verdict: "message", callerName: terminal.callerName, reason: terminal.summary, callbackNumber: terminal.callbackNumber, cost });
+        return;
+      }
+      // spam
+      await redirectToHangup(this.env, this.callSid, "This number isn't taking calls. Goodbye.");
+      await addToBlocklist(this.env.DB, this.fromE164, `claude_spam:${terminal.reason}`);
       await recordCall(this.env.DB, {
         id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
-        outcomeStage: "conversation", verdict: "bridged",
-        callerName: terminal.callerName, reason: terminal.reason, transcript, costEstimateUsd: cost,
+        outcomeStage: "conversation", verdict: "spam",
+        reason: terminal.reason, transcript, costEstimateUsd: cost,
       });
-      return;
+      await this.notifyOwner({ verdict: "spam", reason: terminal.reason, cost });
+    } catch (err) {
+      console.log(`handleTerminal error: ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    if (terminal.kind === "message") {
-      await redirectToHangup(this.env, this.callSid, "Thanks — I'll pass your message along. Goodbye.");
-      await recordCall(this.env.DB, {
-        id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
-        outcomeStage: "conversation", verdict: "message",
-        callerName: terminal.callerName, reason: terminal.summary, transcript, costEstimateUsd: cost,
-      });
-      await this.notifyOwner({ verdict: "message", callerName: terminal.callerName, reason: terminal.summary, callbackNumber: terminal.callbackNumber, cost });
-      return;
-    }
-
-    // spam: hang up, remember the number (learning blocklist), notify.
-    await redirectToHangup(this.env, this.callSid, "This number isn't taking calls. Goodbye.");
-    await addToBlocklist(this.env.DB, this.fromE164, `claude_spam:${terminal.reason}`);
-    await recordCall(this.env.DB, {
-      id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
-      outcomeStage: "conversation", verdict: "spam",
-      reason: terminal.reason, transcript, costEstimateUsd: cost,
-    });
-    await this.notifyOwner({ verdict: "spam", reason: terminal.reason, cost });
   }
 
   private async notifyOwner(args: {
@@ -147,16 +161,8 @@ export class RelaySession {
     });
     try {
       await sendSms(this.env, this.env.USER_CELL_E164, body);
-    } catch {
-      // best-effort notification — don't fail call handling on an SMS hiccup
-    }
-  }
-
-  async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-    try {
-      ws.close();
-    } catch {
-      // socket already closing — ignore
+    } catch (err) {
+      console.log(`sms error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

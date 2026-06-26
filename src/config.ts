@@ -25,6 +25,8 @@ export interface Env {
   REPUTATION_LOOKUP_ENABLED: string;
   DAILY_BUDGET_USD: string;
   OWNER_NAME?: string;
+  /** Free-text description of the owner + who to put through vs. block. */
+  OWNER_PROFILE?: string;
 }
 
 export function settingsFromEnv(env: Env): ScreenerSettings {
