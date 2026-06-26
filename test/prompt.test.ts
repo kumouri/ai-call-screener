@@ -1,9 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { buildSystemPrompt, SCREENER_TOOLS } from "../src/screener/prompt";
+import { MARGO } from "../src/persona";
 
 describe("buildSystemPrompt", () => {
   it("includes the owner name", () => {
     expect(buildSystemPrompt("Ceryce")).toContain("Ceryce");
+  });
+
+  it("injects the persona identity and fills the {owner} placeholder", () => {
+    const p = buildSystemPrompt("Ceryce", undefined, MARGO);
+    expect(p).toContain("Margo");
+    expect(p).toContain("Ceryce's assistant");
+    expect(p).not.toContain("{owner}");
+  });
+
+  it("adds a pronunciation note when a spoken name is given", () => {
+    const p = buildSystemPrompt("Ceryce", undefined, MARGO, "Cerise");
+    expect(p).toContain('write it as "Cerise"');
   });
 
   it("injects the owner profile when provided", () => {

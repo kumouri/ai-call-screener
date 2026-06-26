@@ -29,3 +29,4 @@ POST_GATE_ACTION = "converse"          # "converse" (Claude screens) | "ring_thr
 REPUTATION_LOOKUP_ENABLED = "false"    # paid Twilio Lookup — off by default
 DAILY_BUDGET_USD = "2.00"              # 0 disables the daily budget guard
 OWNER_NAME = "Ceryce"
+OWNER_NAME_SPOKEN = "Cerise"            # phonetic for TTS — pronounced "sir-EESE"

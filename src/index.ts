@@ -17,6 +17,7 @@ import type { CallerInfo } from "./screener/decision";
 import { decideFunnel, decidePostGate } from "./screener/funnel";
 import { lookupLists } from "./data/db";
 import { connectRelay, dial, gate, reject, say } from "./twiml";
+import { MARGO } from "./persona";
 
 export { RelaySession } from "./relay/session";
 
@@ -96,10 +97,15 @@ async function handleGate(request: Request, env: Env): Promise<Response> {
   // blocklist, and transfer without another lookup.
   const base = baseUrlOf(request, env);
   const sessionId = crypto.randomUUID();
+  const owner = env.OWNER_NAME ?? "the owner";
+  const ownerSpoken = env.OWNER_NAME_SPOKEN ?? owner;
   return xml(
     connectRelay({
       wsUrl: `${wssOf(base)}/ws?s=${sessionId}`,
-      welcomeGreeting: "Hi, you've reached a call screener. May I ask who's calling and what it's about?",
+      welcomeGreeting: MARGO.greeting(ownerSpoken),
+      ttsProvider: MARGO.ttsProvider,
+      voice: MARGO.voice,
+      hints: [owner, ownerSpoken].join(", "),
       parameters: [
         { name: "from", value: from },
         { name: "to", value: to },
