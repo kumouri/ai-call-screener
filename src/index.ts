@@ -15,7 +15,7 @@ import type { Env } from "./config";
 import { settingsFromEnv } from "./config";
 import type { CallerInfo } from "./screener/decision";
 import { decideFunnel, decidePostGate } from "./screener/funnel";
-import { lookupLists, syncGoogleContacts, type GoogleContact } from "./data/db";
+import { listBlocklist, lookupLists, syncGoogleContacts, type GoogleContact } from "./data/db";
 import { connectRelay, dial, gate, hangupResponse, reject, say, voicemail } from "./twiml";
 import { sendSms } from "./notify/sms";
 import { MARGO } from "./persona";
@@ -31,6 +31,7 @@ export default {
     if (method === "POST" && pathname === "/gate") return handleGate(request, env);
     if (pathname === "/ws") return handleWs(request, env);
     if (method === "GET" && pathname === "/status") return handleStatus(env);
+    if (method === "GET" && pathname === "/blocklist") return handleBlocklist(request, env);
     if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
     if (method === "POST" && pathname === "/after-bridge") return handleAfterBridge(request, env);
     if (method === "POST" && pathname === "/voicemail") return handleVoicemail(request, env);
@@ -137,6 +138,18 @@ function handleStatus(env: Env): Response {
     dailyBudgetUsd: settings.dailyBudgetUsd,
   });
   return new Response(body, { headers: { "Content-Type": "application/json" } });
+}
+
+/** Serves Margo's learned blocklist to the on-device blocker app (bearer-authed). */
+async function handleBlocklist(request: Request, env: Env): Promise<Response> {
+  const secret = env.BLOCKLIST_SYNC_SECRET;
+  if (secret === undefined || secret === "" || request.headers.get("Authorization") !== `Bearer ${secret}`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  const numbers = await listBlocklist(env.DB);
+  return new Response(JSON.stringify({ numbers, count: numbers.length }), {
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /** Google Contacts sync push from the owner's Apps Script (see docs/contacts-sync.md). */
