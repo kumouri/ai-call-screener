@@ -13,3 +13,7 @@ USER_CELL_E164=+15555550100
 
 # Public https base URL of this Worker / dev tunnel (no trailing slash).
 PUBLIC_BASE_URL=https://your-tunnel.example.com
+
+# Optional. Bearer secret Margo's scheduler presents to POST /push-sms to text
+# the owner a short brief digest. Leave unset to disable that endpoint (401).
+PUSH_SMS_SECRET=choose-a-long-random-string

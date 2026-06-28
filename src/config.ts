@@ -35,6 +35,8 @@ export interface Env {
   CONTACTS_SYNC_SECRET?: string;
   /** Bearer secret the on-device blocker app must present to GET /blocklist. */
   BLOCKLIST_SYNC_SECRET?: string;
+  /** Bearer secret Margo's scheduler must present to POST /push-sms (brief highlights). */
+  PUSH_SMS_SECRET?: string;
 }
 
 export function settingsFromEnv(env: Env): ScreenerSettings {

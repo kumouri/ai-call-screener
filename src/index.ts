@@ -6,6 +6,8 @@
  *                 ConversationRelay; anything else => hang up (robodialer).
  *   GET  /ws    — ConversationRelay WebSocket, handed to the RelaySession DO.
  *   GET  /status— liveness + effective settings (expanded into a dashboard in M5).
+ *   POST /push-sms — bearer-authed: send a short SMS (e.g. Margo's brief highlights)
+ *                 to the owner's cell via Twilio. Used by Margo's scheduler.
  *
  * The public base URL is taken from PUBLIC_BASE_URL when set, otherwise derived
  * from the incoming request — so it works behind a dev tunnel or a deployed
@@ -35,6 +37,7 @@ export default {
     if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
     if (method === "POST" && pathname === "/after-bridge") return handleAfterBridge(request, env);
     if (method === "POST" && pathname === "/voicemail") return handleVoicemail(request, env);
+    if (method === "POST" && pathname === "/push-sms") return handlePushSms(request, env);
 
     return new Response("not found", { status: 404 });
   },
@@ -209,4 +212,56 @@ async function handleVoicemail(request: Request, env: Env): Promise<Response> {
     // best-effort
   }
   return new Response("ok");
+}
+
+export interface PushSmsMessage {
+  to: string;
+  text: string;
+}
+
+/**
+ * Validate/normalize a POST /push-sms JSON body. Pure (no I/O) so it's unit-testable.
+ * `defaultTo` (the owner's cell) is used when the body omits an explicit recipient.
+ */
+export function parsePushSms(
+  body: unknown,
+  defaultTo: string,
+): { ok: true; msg: PushSmsMessage } | { ok: false; error: string } {
+  if (typeof body !== "object" || body === null) return { ok: false, error: "body must be a JSON object" };
+  const b = body as { text?: unknown; to?: unknown };
+  const text = typeof b.text === "string" ? b.text.trim() : "";
+  if (text === "") return { ok: false, error: "missing 'text'" };
+  if (text.length > 1200) return { ok: false, error: "'text' too long (max 1200 chars)" };
+  const to = typeof b.to === "string" && b.to.trim() !== "" ? b.to.trim() : defaultTo;
+  if (!to.startsWith("+")) return { ok: false, error: "'to' must be E.164 (start with +)" };
+  return { ok: true, msg: { to, text } };
+}
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Bearer-authed SMS send — lets Margo's scheduler push the owner a short digest. */
+async function handlePushSms(request: Request, env: Env): Promise<Response> {
+  const secret = env.PUSH_SMS_SECRET;
+  if (secret === undefined || secret === "" || request.headers.get("Authorization") !== `Bearer ${secret}`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ ok: false, error: "bad json" }, 400);
+  }
+  const parsed = parsePushSms(body, env.USER_CELL_E164);
+  if (!parsed.ok) return jsonResponse({ ok: false, error: parsed.error }, 400);
+  try {
+    await sendSms(env, parsed.msg.to, parsed.msg.text);
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e) }, 502);
+  }
+  return jsonResponse({ ok: true, to: parsed.msg.to });
 }

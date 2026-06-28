@@ -1,6 +1,7 @@
 # Cloudflare Workers config for the AI call screener.
-# Secrets (ANTHROPIC_API_KEY, TWILIO_*, USER_CELL_E164, PUBLIC_BASE_URL) are NOT
-# here — set them in .dev.vars (local) or `wrangler secret put NAME` (deployed).
+# Secrets (ANTHROPIC_API_KEY, TWILIO_*, USER_CELL_E164, PUBLIC_BASE_URL,
+# PUSH_SMS_SECRET) are NOT here — set them in .dev.vars (local) or
+# `wrangler secret put NAME` (deployed).
 
 name = "ai-call-screener"
 main = "src/index.ts"

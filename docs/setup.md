@@ -22,6 +22,11 @@ wrangler secret put USER_CELL_E164
 wrangler secret put PUBLIC_BASE_URL
 ```
 
+Optional: `wrangler secret put PUSH_SMS_SECRET` enables `POST /push-sms`, a bearer-authed endpoint that
+texts the owner a short digest (Margo's brief highlights). Without it the endpoint returns 401. Margo's
+scheduler calls it as `POST {PUBLIC_BASE_URL}/push-sms` with header `Authorization: Bearer <secret>` and
+body `{"text":"…"}` (optional `"to"` E.164; defaults to `USER_CELL_E164`).
+
 ## 2. Provision D1
 
 ```bash
