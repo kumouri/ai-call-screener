@@ -3,6 +3,7 @@
  * plain data (no SDK import) so it is host-agnostic and unit-testable. The
  * Durable Object wires these into the Anthropic API in M2.
  */
+import type { Persona } from "../persona";
 
 /** Anthropic tool schema shape (a subset, enough for our three tools). */
 export interface ToolSchema {
@@ -15,18 +16,42 @@ export interface ToolSchema {
   };
 }
 
-export function buildSystemPrompt(ownerName: string): string {
+export function buildSystemPrompt(
+  ownerName: string,
+  ownerProfile?: string,
+  persona?: Persona,
+  spokenName?: string,
+  ownerPassword?: string,
+): string {
+  const identity =
+    persona !== undefined
+      ? persona.demeanor.replaceAll("{owner}", ownerName)
+      : `You are a warm, efficient phone call screener for ${ownerName}.`;
+  const profile = ownerProfile !== undefined && ownerProfile.trim() !== "" ? `About ${ownerName}: ${ownerProfile.trim()}` : "";
+  const pronounce =
+    spokenName !== undefined && spokenName.trim() !== "" && spokenName !== ownerName
+      ? `When you say ${ownerName}'s name aloud, write it as "${spokenName}" so it is pronounced correctly.`
+      : "";
+  const ownerAuth =
+    ownerPassword !== undefined && ownerPassword.trim() !== ""
+      ? `If a caller claims to be ${ownerName}, or you conclude the caller is ${ownerName} themselves, do not simply believe them — with dry amusement, ask for the password, and only treat them as the real ${ownerName} if they say exactly "${ownerPassword.trim()}". Otherwise keep screening normally.`
+      : `If a caller claims to be ${ownerName}, or you conclude the caller is ${ownerName} themselves, play along with dry amusement but make them prove it: ask for the password. No real password is set, so keep them on their toes and never actually confirm it's them — it's a running bit.`;
   return [
-    `You are a friendly, efficient phone call screener for ${ownerName}.`,
-    `You are speaking with an unknown caller who just pressed 1 to reach ${ownerName}.`,
-    `Your job: in as few turns as possible, find out (1) who is calling and (2) the reason.`,
-    `Be warm but brief — one short sentence per turn. Do not make promises on ${ownerName}'s behalf.`,
-    `As soon as you know who it is and why they're calling, call exactly one tool:`,
-    `- connect_call: a legitimate caller ${ownerName} would want to speak with now.`,
-    `- take_message: legitimate but ${ownerName} can call back; capture a concise message.`,
-    `- mark_spam: sales, robocall, scam, or refuses to identify themselves.`,
-    `If the caller is evasive or pushy about personal/financial info, lean toward mark_spam.`,
-  ].join(" ");
+    identity,
+    `You are screening an unknown caller who just pressed 1 to reach ${ownerName}.`,
+    profile,
+    pronounce,
+    `Speech-to-text sometimes mangles ${ownerName}'s name (hearing "Theresa", "Cerise", or similar); treat any close-sounding variant as ${ownerName}, and never tell a caller that ${ownerName} isn't here or quibble over the name.`,
+    ownerAuth,
+    `Greet them in character and find out who they are and why they're calling, in as few turns as possible — warm and human, never an interrogation. Don't make promises on ${ownerName}'s behalf.`,
+    `Use what you know about ${ownerName} to judge the call, then call exactly one tool:`,
+    `- connect_call: someone ${ownerName} would want to talk to now (for example a recruiter about a software role, or a genuine personal or appointment call).`,
+    `- take_message: legitimate but it can wait, or you're genuinely unsure — capture a concise message.`,
+    `- mark_spam: sales, robocalls, scams, fake "support" or "security" calls, warranty or insurance pitches, or anyone evasive about who they are.`,
+    `Keep every reply short, clipped, and low-key — one dry sentence at most. No enthusiasm, no exclamations, no gushing or filler; you are pleasant but distinctly unbothered, like you have somewhere better to be.`,
+  ]
+    .filter((line) => line !== "")
+    .join(" ");
 }
 
 export const SCREENER_TOOLS: ToolSchema[] = [

@@ -8,6 +8,12 @@ describe("twiml builders", () => {
     );
   });
 
+  it("dial supports a ring timeout and a no-answer fallback", () => {
+    const x = dial("+14155550100", "+14155550111", { timeoutSec: 18, fallbackMessage: "try later" });
+    expect(x).toContain('<Dial timeout="18" callerId="+14155550111">+14155550100</Dial>');
+    expect(x).toContain("<Say>try later</Say><Hangup />");
+  });
+
   it("reject declines without answering", () => {
     expect(reject()).toContain('<Reject reason="rejected" />');
   });
@@ -24,6 +30,22 @@ describe("twiml builders", () => {
     const x = connectRelay({ wsUrl: "wss://host/ws", welcomeGreeting: "hi" });
     expect(x).toContain('<ConversationRelay url="wss://host/ws"');
     expect(x).toContain('welcomeGreeting="hi"');
+  });
+
+  it("connectRelay passes custom parameters through to setup", () => {
+    const x = connectRelay({
+      wsUrl: "wss://host/ws",
+      welcomeGreeting: "hi",
+      parameters: [{ name: "from", value: "+15551234567" }],
+    });
+    expect(x).toContain('<Parameter name="from" value="+15551234567" />');
+    expect(x).toContain("</ConversationRelay>");
+  });
+
+  it("connectRelay sets the persona TTS voice when provided", () => {
+    const x = connectRelay({ wsUrl: "wss://h/ws", welcomeGreeting: "hi", ttsProvider: "Amazon", voice: "Joanna-Neural" });
+    expect(x).toContain('ttsProvider="Amazon"');
+    expect(x).toContain('voice="Joanna-Neural"');
   });
 
   it("escapes XML-special characters in dynamic text", () => {
