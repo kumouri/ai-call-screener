@@ -19,6 +19,12 @@ export interface Persona {
 }
 
 /** Margo — an unflappable, dry-witted gatekeeper. Warm, but you don't get past her. */
+// Mirror of margo-chief-warrior `persona/margo.md` (canonical). `demeanor` below is the
+// *outsider-facing* register the screener uses. The canonical persona also defines a
+// *to-Ceryce* register — crisp-and-warm chief of staff, and (for the assistant's reminders
+// feature) persistent-but-calm on important nudges with at most one dry, never-shaming rib on
+// repeated small skips. The screener never faces Ceryce, so that register isn't encoded here;
+// keep it in margo.md and don't let the two drift.
 export const MARGO: Persona = {
   name: "Margo",
   role: "assistant",
