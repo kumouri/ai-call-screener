@@ -18,6 +18,7 @@ import { decideFunnel, decidePostGate } from "./screener/funnel";
 import { listBlocklist, lookupLists, syncGoogleContacts, type GoogleContact } from "./data/db";
 import { connectRelay, dial, gate, hangupResponse, reject, say, voicemail } from "./twiml";
 import { sendSms } from "./notify/sms";
+import { placeCall } from "./notify/call";
 import { MARGO } from "./persona";
 
 export { RelaySession } from "./relay/session";
@@ -33,6 +34,7 @@ export default {
     if (method === "GET" && pathname === "/status") return handleStatus(env);
     if (method === "GET" && pathname === "/blocklist") return handleBlocklist(request, env);
     if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
+    if (method === "POST" && pathname === "/push-call") return handlePushCall(request, env);
     if (method === "POST" && pathname === "/after-bridge") return handleAfterBridge(request, env);
     if (method === "POST" && pathname === "/voicemail") return handleVoicemail(request, env);
 
@@ -179,6 +181,45 @@ function parseContacts(body: unknown): GoogleContact[] {
     if (numberE164.startsWith("+")) out.push({ numberE164, name });
   }
   return out;
+}
+
+/**
+ * Place an outbound reminder call to the owner (bearer-authed). Twilio creds stay
+ * in the Worker; Margo's local push_call.py only holds this URL + secret. Body:
+ * { "text": "...", "to"?: E164 }; `to` defaults to USER_CELL_E164. Mirrors the
+ * /blocklist + /sync-contacts auth pattern.
+ */
+async function handlePushCall(request: Request, env: Env): Promise<Response> {
+  const secret = env.PUSH_CALL_SECRET;
+  if (secret === undefined || secret === "" || request.headers.get("Authorization") !== `Bearer ${secret}`) {
+    return new Response("unauthorized", { status: 401 });
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return new Response("bad json", { status: 400 });
+  }
+  const textRaw = typeof body === "object" && body !== null ? (body as { text?: unknown }).text : undefined;
+  const text = typeof textRaw === "string" ? textRaw.trim() : "";
+  if (text === "") {
+    return jsonResponse({ ok: false, error: "missing text" }, 400);
+  }
+  const toRaw = typeof body === "object" && body !== null ? (body as { to?: unknown }).to : undefined;
+  const to = typeof toRaw === "string" && toRaw.startsWith("+") ? toRaw : env.USER_CELL_E164;
+  try {
+    const sid = await placeCall(env, to, text);
+    return jsonResponse({ ok: true, sid, to });
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e) }, 502);
+  }
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 /** After a live-transfer dial ends: hang up if it connected, else roll to voicemail. */
