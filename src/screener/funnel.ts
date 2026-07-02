@@ -17,6 +17,16 @@ export function decideFunnel(
   lists: ListLookup,
   settings: ScreenerSettings,
 ): FunnelDecision {
+  // 0. Self-call guard: a call *from* our own bridge target (the user's cell)
+  //    must never reach the "allow" path, or we'd <Dial> the very line that's
+  //    calling. That line is busy (it's placing the call), so Twilio rolls
+  //    straight to its voicemail — which looks exactly like the screener being
+  //    "down". Route it through the gate instead, so the owner can still reach
+  //    Margo when self-testing.
+  if (settings.userCellE164 !== "" && caller.fromE164 === settings.userCellE164) {
+    return { stage: "gate", reason: "gate:self_call" };
+  }
+
   // 1. Known-good contact: ring through, never screened.
   if (lists.isAllowlisted) {
     return { stage: "allow", reason: "allowlisted_contact" };
