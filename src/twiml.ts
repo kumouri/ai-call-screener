@@ -92,6 +92,32 @@ export function gate(opts: GateOptions): string {
   return doc(`${gather}<Hangup />`);
 }
 
+export interface EscalationGatherOptions {
+  /** Spoken line (the reminder + a "press 1" instruction). */
+  prompt: string;
+  /** Absolute URL Twilio POSTs the pressed digit to (our /push-call/ack route). */
+  actionUrl: string;
+  numDigits?: number;
+  /** Seconds to wait for a keypress after the prompt before hanging up. */
+  timeoutSec?: number;
+}
+
+/**
+ * Escalating reminder call: speak the line and listen for a keypress. Same shape
+ * as `gate()`, but a longer default timeout (she needs a moment to press) and the
+ * `<Gather>` wraps the whole `<Say>` so a press *during* the message is captured.
+ * On no input, falls through to `<Hangup>` — the Durable Object's alarm calls back.
+ */
+export function escalationGather(opts: EscalationGatherOptions): string {
+  const numDigits = opts.numDigits ?? 1;
+  const timeout = opts.timeoutSec ?? 30;
+  const gather =
+    `<Gather numDigits="${numDigits}" timeout="${timeout}" action="${escapeXml(opts.actionUrl)}" method="POST">` +
+    `<Say>${escapeXml(opts.prompt)}</Say>` +
+    `</Gather>`;
+  return doc(`${gather}<Hangup />`);
+}
+
 export interface ConnectRelayOptions {
   /** wss:// URL of our ConversationRelay WebSocket (the Durable Object). */
   wsUrl: string;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { callsCreateUrl, placeCall } from "../src/notify/call";
+import { callsCreateUrl, placeCall, placeEscalationCall } from "../src/notify/call";
 import type { Env } from "../src/config";
 
 describe("callsCreateUrl", () => {
@@ -46,5 +46,36 @@ describe("placeCall", () => {
   it("throws on a non-2xx Twilio response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 400 }));
     await expect(placeCall(fakeEnv(), "+15551112222", "hi")).rejects.toThrow(/Twilio call create 400/);
+  });
+});
+
+describe("placeEscalationCall", () => {
+  it("POSTs a <Gather> TwiML wired to the ack URL and returns the SID", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ sid: "CA777" }), { status: 201 }),
+    );
+
+    const sid = await placeEscalationCall(
+      fakeEnv(),
+      "+15551112222",
+      "Wake up — 7am.",
+      "https://host/push-call/ack?id=abc123",
+    );
+    expect(sid).toBe("CA777");
+
+    const body = spy.mock.calls[0]![1]!.body as URLSearchParams;
+    const twiml = body.get("Twiml")!;
+    expect(twiml).toContain("<Gather");
+    expect(twiml).toContain('action="https://host/push-call/ack?id=abc123"');
+    expect(twiml).toContain("Wake up");
+    expect(twiml).toContain("press 1"); // the ack instruction
+    expect(body.get("To")).toBe("+15551112222");
+  });
+
+  it("throws on a non-2xx Twilio response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
+    await expect(
+      placeEscalationCall(fakeEnv(), "+15551112222", "hi", "https://host/ack"),
+    ).rejects.toThrow(/Twilio call create 500/);
   });
 });

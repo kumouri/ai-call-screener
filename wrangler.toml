@@ -12,9 +12,18 @@ compatibility_flags = ["nodejs_compat"]
 name = "RELAY_SESSION"
 class_name = "RelaySession"
 
+# Durable Object: escalating "call me until I answer" reminder loop (storage alarm).
+[[durable_objects.bindings]]
+name = "CALL_ESCALATION"
+class_name = "CallEscalation"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RelaySession"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CallEscalation"]
 
 # D1 (SQLite): allowlist / blocklist / call log.
 # database_id is filled in during provisioning (M5): `wrangler d1 create call_screener`.
