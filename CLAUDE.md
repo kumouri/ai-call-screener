@@ -22,11 +22,16 @@ Inbound call → Worker `POST /voice` runs the cheapest-first cascade (`src/scre
 "optimize" it back to hibernation.
 
 ## Key files
-- `src/index.ts` — Worker router: `/voice`, `/gate`, `/ws`, `/status`, `/sync-contacts`.
+- `src/index.ts` — Worker router: `/voice`, `/gate`, `/ws`, `/status`, `/sync-contacts`, `/blocklist`,
+  `/push-call` (+ `/push-call/ack`), `/after-bridge`, `/voicemail`.
 - `src/screener/` — `funnel.ts` (routing), `conversation.ts` (turn engine + cap), `brain.ts` +
   `anthropic-client.ts` (LLM), `prompt.ts` (system prompt), `decision.ts` (types).
 - `src/persona.ts` — **Margo** (reusable identity; ElevenLabs voice `Lily` = `pFZP5JQG7iQjIQuC4Bku`).
-- `src/relay/session.ts` — the Durable Object. `src/twilio/calls.ts` — live-call transfer.
+- `src/relay/session.ts` — the `RelaySession` Durable Object. `src/twilio/calls.ts` — live-call transfer.
+- `src/notify/call.ts` — outbound reminder calls: `placeCall` (single ring) + `placeEscalationCall`.
+- `src/escalation/escalation.ts` — the **`CallEscalation`** Durable Object: `POST /push-call {escalate:true}`
+  re-calls (default every 2 min, ≤15 tries) via a **storage alarm** until she presses a digit
+  (`POST /push-call/ack`) or the cap is hit. Pure `nextEscalationStep` for the retry decision.
 - `src/data/db.ts` + `schema.sql` — D1 access incl. `syncGoogleContacts`/`reconcileContacts`.
 - `scripts/google-contacts-sync.gs` — Apps Script for the contacts sync (see `docs/contacts-sync.md`).
 
