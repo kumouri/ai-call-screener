@@ -39,6 +39,26 @@ describe("decideFunnel", () => {
     expect(d.reason).toContain("unknown_caller");
   });
 
+  it("self-call (from our own bridge target) -> gate, never allow/dial-to-self", () => {
+    const d = decideFunnel(caller(settings.userCellE164), lists(false, false), settings);
+    expect(d.stage).toBe("gate");
+    expect(d.reason).toBe("gate:self_call");
+  });
+
+  it("self-call guard wins even when the cell is allowlisted", () => {
+    // The exact bug we hit: own cell was synced into the allowlist, so calling
+    // from it dialed back to a busy line and rolled to voicemail.
+    const d = decideFunnel(caller(settings.userCellE164), lists(true, false), settings);
+    expect(d.stage).toBe("gate");
+    expect(d.reason).toBe("gate:self_call");
+  });
+
+  it("empty userCellE164 disables the self-call guard (no false match on \"\")", () => {
+    const d = decideFunnel(caller(""), lists(false, false), { ...settings, userCellE164: "" });
+    expect(d.stage).toBe("gate");
+    expect(d.reason).not.toBe("gate:self_call");
+  });
+
   it("neighbor-spoof -> gate, reason recorded", () => {
     const d = decideFunnel(caller("+14155550199"), lists(false, false), settings);
     expect(d.stage).toBe("gate");
