@@ -9,6 +9,8 @@ export interface Env {
   // --- bindings ---
   DB: D1Database;
   RELAY_SESSION: DurableObjectNamespace;
+  /** Escalating "call me until I answer" reminder loop (one DO instance per escalation id). */
+  CALL_ESCALATION: DurableObjectNamespace;
 
   // --- secrets ---
   ANTHROPIC_API_KEY: string;

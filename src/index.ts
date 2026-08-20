@@ -22,6 +22,7 @@ import { placeCall } from "./notify/call";
 import { MARGO } from "./persona";
 
 export { RelaySession } from "./relay/session";
+export { CallEscalation } from "./escalation/escalation";
 
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -35,6 +36,7 @@ export default {
     if (method === "GET" && pathname === "/blocklist") return handleBlocklist(request, env);
     if (method === "POST" && pathname === "/sync-contacts") return handleSyncContacts(request, env);
     if (method === "POST" && pathname === "/push-call") return handlePushCall(request, env);
+    if (method === "POST" && pathname === "/push-call/ack") return handlePushCallAck(request, env);
     if (method === "POST" && pathname === "/after-bridge") return handleAfterBridge(request, env);
     if (method === "POST" && pathname === "/voicemail") return handleVoicemail(request, env);
 
@@ -205,14 +207,53 @@ async function handlePushCall(request: Request, env: Env): Promise<Response> {
   if (text === "") {
     return jsonResponse({ ok: false, error: "missing text" }, 400);
   }
-  const toRaw = typeof body === "object" && body !== null ? (body as { to?: unknown }).to : undefined;
+  const obj = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const toRaw = obj.to;
   const to = typeof toRaw === "string" && toRaw.startsWith("+") ? toRaw : env.USER_CELL_E164;
+
+  // Escalating call: hand off to the CallEscalation Durable Object, which retries
+  // until she presses a digit (POST /push-call/ack) or hits the attempt cap.
+  if (obj.escalate === true) {
+    const escalationId = crypto.randomUUID();
+    const base = baseUrlOf(request, env);
+    const intervalSec = typeof obj.intervalSec === "number" ? obj.intervalSec : undefined;
+    const maxAttempts = typeof obj.maxAttempts === "number" ? obj.maxAttempts : undefined;
+    try {
+      const stub = env.CALL_ESCALATION.get(env.CALL_ESCALATION.idFromName(escalationId));
+      await stub.fetch("https://escalation/start", {
+        method: "POST",
+        body: JSON.stringify({ id: escalationId, text, to, base, intervalSec, maxAttempts }),
+      });
+      return jsonResponse({ ok: true, escalationId, to });
+    } catch (e) {
+      return jsonResponse({ ok: false, error: String(e) }, 502);
+    }
+  }
+
   try {
     const sid = await placeCall(env, to, text);
     return jsonResponse({ ok: true, sid, to });
   } catch (e) {
     return jsonResponse({ ok: false, error: String(e) }, 502);
   }
+}
+
+/**
+ * Twilio `<Gather>` action for an escalating call: she pressed a digit. Tell the
+ * CallEscalation DO (by the `id` query param) to stop retrying, then thank + hang up.
+ * If the gather timed out with no digit, Twilio hangs up without hitting this route,
+ * so a non-empty `Digits` is the real ack.
+ */
+async function handlePushCallAck(request: Request, env: Env): Promise<Response> {
+  const form = await request.formData();
+  const digits = field(form, "Digits");
+  const id = new URL(request.url).searchParams.get("id") ?? "";
+  if (digits !== "" && id !== "") {
+    const stub = env.CALL_ESCALATION.get(env.CALL_ESCALATION.idFromName(id));
+    await stub.fetch("https://escalation/ack", { method: "POST" });
+    return xml(say("Got it — I'll stop calling. Talk soon.", { hangup: true }));
+  }
+  return xml(say("Goodbye.", { hangup: true }));
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
