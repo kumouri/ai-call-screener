@@ -10,7 +10,8 @@
  *
  * Loop: caller speech -> Claude (turn engine) -> spoken reply, until Claude
  * reaches a terminal decision, which transfers the live call (REST), persists
- * the verdict to D1, and texts the owner.
+ * the verdict to D1, and notifies the owner (Telegram, or SMS as the fallback —
+ * `../notify/owner.ts`).
  */
 import type { Env } from "../config";
 import type { SetupMessage } from "./protocol";
@@ -19,20 +20,47 @@ import type { LlmClient, LlmTurn } from "../screener/brain";
 import { createAnthropicClient } from "../screener/anthropic-client";
 import { runCallerTurn, type TerminalAction } from "../screener/conversation";
 import { buildSystemPrompt, SCREENER_TOOLS } from "../screener/prompt";
+import { runOwnerTurn } from "./owner-conversation";
+import { buildOwnerSystemPrompt, OWNER_TOOLS } from "./owner-prompt";
+import { isAlertAck, looksLikeVoicemail } from "./alert";
+
+/** Spoken when she acknowledges an alert call with a key press; the call stays open after it. */
+export const ALERT_KEY_ACK_REPLY = "Got it — I'll stop calling. I'm still here if you want to talk.";
 import { MARGO } from "../persona";
 import { estimateCallCost } from "../budget";
 import { addToBlocklist, recordCall } from "../data/db";
-import { sendSms } from "../notify/sms";
+import { notifyOwner } from "../notify/owner";
 import { formatVerdictSms } from "../notify/format";
 import { redirectToDial, redirectToHangup } from "../twilio/calls";
 
-const MODEL = "claude-haiku-4-5-20251001"; // Haiku 4.5: fast + cheap for real-time turns
+// Shared by both the screener and owner-mode (talk) conversations. Haiku 4.5: fast + cheap, the
+// right call for real-time turns; Sonnet would read warmer but costs more per minute — trade-off
+// noted in margo/docs/voice-call-spec.md, not exercised by this MVP.
+const MODEL = "claude-haiku-4-5-20251001";
 const MAX_TURNS = 6; // hard cap so a stalling caller can't run up minutes
+const MAX_OWNER_TURNS = 40; // a real conversation runs much longer than a screening call
+
+/**
+ * Owner mode requires BOTH the persisted DO seed AND the talk TwiML's `mode=owner` `<Parameter>`
+ * to agree — a lone signal (a stale/evicted seed with no param, or a param with no real seed)
+ * falls back to screener rather than risk the owner conversation on a half-signal. Pure (unit-
+ * tested) so the two-signal rule can't silently drift from what `onMessage` actually does.
+ */
+export function resolveSessionMode(storageMode: "screener" | "owner", paramMode: string | undefined): "screener" | "owner" {
+  return storageMode === "owner" && paramMode === "owner" ? "owner" : "screener";
+}
 
 export class RelaySession {
   private readonly env: Env;
+  private readonly state: DurableObjectState;
   private readonly client: LlmClient;
-  private readonly system: string;
+  private mode: "screener" | "owner" = "screener";
+  private ownerContext = "";
+  /** An alert call's line (`./alert.ts`), "" for an ordinary talk call. Owner mode only. */
+  private alert = "";
+  /** The `CallEscalation` id driving this alert's re-calls, told when she acknowledges. */
+  private escalationId = "";
+  private alertAcked = false;
   private callSid = "";
   private fromE164 = "";
   private toE164 = "";
@@ -41,14 +69,40 @@ export class RelaySession {
   private history: LlmTurn[] = [];
   private done = false;
 
-  constructor(_state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: Env) {
     this.env = env;
+    this.state = state;
     this.client = createAnthropicClient({ apiKey: env.ANTHROPIC_API_KEY, model: MODEL });
-    this.system = buildSystemPrompt(env.OWNER_NAME ?? "the owner", env.OWNER_PROFILE, MARGO, env.OWNER_NAME_SPOKEN, env.OWNER_PASSWORD);
+    // The phone rings for many seconds between `seed()` and the ConversationRelay handshake; an
+    // idle DO can be evicted in between, and a fresh instance's fields start back at the
+    // "screener" default. `blockConcurrencyWhile` holds off `fetch()` (both the seed POST and the
+    // WS upgrade) until any persisted seed from a prior instance is reloaded, so eviction can't
+    // silently drop owner mode back to the screener persona mid-call.
+    state.blockConcurrencyWhile(() => this.loadSeed());
+  }
+
+  private async loadSeed(): Promise<void> {
+    const mode = await this.state.storage.get<string>("mode");
+    if (mode === "owner") {
+      this.mode = "owner";
+      this.ownerContext = (await this.state.storage.get<string>("ownerContext")) ?? "";
+      this.alert = (await this.state.storage.get<string>("alert")) ?? "";
+      this.escalationId = (await this.state.storage.get<string>("escalationId")) ?? "";
+    }
+  }
+
+  /** The active system prompt, computed on demand since `mode` may be seeded after construction. */
+  private systemPrompt(): string {
+    const owner = this.env.OWNER_NAME ?? "Ceryce";
+    if (this.mode === "owner") {
+      return buildOwnerSystemPrompt(owner, MARGO, this.env.OWNER_NAME_SPOKEN, this.ownerContext, this.alert);
+    }
+    return buildSystemPrompt(this.env.OWNER_NAME ?? "the owner", this.env.OWNER_PROFILE, MARGO, this.env.OWNER_NAME_SPOKEN, this.env.OWNER_PASSWORD);
   }
 
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
+      if (request.method === "POST") return this.seed(request);
       return new Response("expected websocket upgrade", { status: 426 });
     }
     const pair = new WebSocketPair();
@@ -58,7 +112,67 @@ export class RelaySession {
     server.addEventListener("message", (event: MessageEvent) => {
       void this.onMessage(server, event.data);
     });
+    // An alert call's escalation holds its next re-call while this call is live; tell it the call
+    // is over (hung up, voicemail done, or ended by us) so it can decide again.
+    server.addEventListener("close", () => {
+      void this.tellEscalation("ended");
+    });
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * Seed this instance into owner (talk) mode BEFORE the Twilio call is placed, so the
+   * ConversationRelay handshake — which arrives moments later, hitting this same Durable Object by
+   * `idFromName(sessionId)` — finds the mode and context already set. POSTed by
+   * `handlePushCallTalk` in `../index.ts`; never reachable from an inbound (screened) call.
+   * Persisted to `state.storage` (not just instance fields) so an eviction between this POST and
+   * the WebSocket handshake — `loadSeed()` in the constructor — doesn't lose it.
+   */
+  private async seed(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response("bad json", { status: 400 });
+    }
+    const obj = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    if (obj.mode === "owner") {
+      this.mode = "owner";
+      this.ownerContext = typeof obj.context === "string" ? obj.context : "";
+      this.alert = typeof obj.alert === "string" ? obj.alert : "";
+      this.escalationId = typeof obj.escalationId === "string" ? obj.escalationId : "";
+      await this.state.storage.put({
+        mode: "owner",
+        ownerContext: this.ownerContext,
+        alert: this.alert,
+        escalationId: this.escalationId,
+      });
+    }
+    return new Response("ok");
+  }
+
+  /**
+   * Tell this alert call's `CallEscalation` what happened: `connected` (hold the next re-call),
+   * `ack` (she got it — stop re-calling), `ended` (the call is over). A no-op for any call that
+   * isn't an alert with an escalation id; best-effort — a failure is logged, never raised into the
+   * call, and the escalation's own in-call ceiling bounds a lost `ended`.
+   */
+  private async tellEscalation(what: "connected" | "ack" | "ended"): Promise<void> {
+    if (this.mode !== "owner" || this.escalationId === "") return;
+    try {
+      const stub = this.env.CALL_ESCALATION.get(this.env.CALL_ESCALATION.idFromName(this.escalationId));
+      await stub.fetch(`https://escalation/${what}`, { method: "POST" });
+    } catch (err) {
+      console.log(`alert ${this.escalationId}: tell ${what} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** She acknowledged the alert (spoke, or pressed a key): stop the re-calls, once. */
+  private async ackAlert(how: string): Promise<void> {
+    if (this.alertAcked) return;
+    this.alertAcked = true;
+    console.log(`alert ${this.escalationId}: acknowledged by ${how}`);
+    await this.tellEscalation("ack");
   }
 
   private async onMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
@@ -74,7 +188,34 @@ export class RelaySession {
         this.toE164 = pick(params["to"], setup.to);
         this.base = pick(params["base"], undefined);
         this.startedAtMs = Date.now();
-        console.log(`setup: callSid=${this.callSid} from=${this.fromE164} to=${this.toE164}`);
+        // Belt and braces on top of `loadSeed()`: the talk TwiML (only the Worker generates it, so
+        // it's trusted) also carries a `mode=owner` <Parameter>, which arrives here as
+        // `customParameters`. `resolveSessionMode` requires both signals to agree.
+        const paramMode = params["mode"];
+        const storageWantsOwner = this.mode === "owner";
+        if (storageWantsOwner !== (paramMode === "owner")) {
+          console.log(
+            `setup: owner-mode signals disagree (storage=${storageWantsOwner ? "owner" : "screener"}, param=${paramMode ?? "none"}) — falling back to screener`,
+          );
+        }
+        this.mode = resolveSessionMode(this.mode, paramMode);
+        if (this.mode !== "owner") {
+          // A screener fallback is never an alert: no ack can reach the escalation, so it keeps
+          // re-calling — the safe direction.
+          this.ownerContext = "";
+          this.alert = "";
+        }
+        console.log(`setup: callSid=${this.callSid} from=${this.fromE164} to=${this.toE164} mode=${this.mode}${this.alert !== "" ? " alert" : ""}`);
+        if (this.alert !== "") await this.tellEscalation("connected");
+        return;
+      }
+
+      if (msg.type === "dtmf") {
+        // Only an alert call asks for a key press; anywhere else a digit means nothing.
+        if (this.done || this.mode !== "owner" || this.alert === "" || this.alertAcked) return;
+        const digit = (msg as { digit?: unknown }).digit;
+        await this.ackAlert(`key ${typeof digit === "string" ? digit : "?"}`);
+        ws.send(JSON.stringify(textToken(ALERT_KEY_ACK_REPLY, true)));
         return;
       }
 
@@ -82,7 +223,34 @@ export class RelaySession {
         if (this.done) return;
         const voicePrompt = typeof (msg as { voicePrompt?: unknown }).voicePrompt === "string" ? (msg as { voicePrompt: string }).voicePrompt : "";
         console.log(`prompt: "${voicePrompt}"`);
-        const outcome = await runCallerTurn(this.client, this.system, SCREENER_TOOLS, this.history, voicePrompt, MAX_TURNS);
+
+        if (this.mode === "owner" && this.alert !== "" && !this.alertAcked) {
+          if (looksLikeVoicemail(voicePrompt)) {
+            // Voicemail or a screening robot picked up, not her: hang up without an ack, so the
+            // escalation calls again rather than counting a recording as "she got it".
+            console.log("alert: voicemail/screening greeting heard — hanging up, not acknowledged");
+            this.done = true;
+            await this.endOwnerCall();
+            return;
+          }
+          if (isAlertAck(voicePrompt)) await this.ackAlert("speech");
+        }
+
+        if (this.mode === "owner") {
+          const outcome = await runOwnerTurn(this.client, this.systemPrompt(), OWNER_TOOLS, this.history, voicePrompt, MAX_OWNER_TURNS);
+          this.history = outcome.history;
+          if (outcome.ended === true) {
+            console.log("owner call: ended");
+            this.done = true;
+            await this.endOwnerCall();
+          } else if (outcome.reply !== undefined) {
+            console.log(`reply: "${outcome.reply}"`);
+            ws.send(JSON.stringify(textToken(outcome.reply, true)));
+          }
+          return;
+        }
+
+        const outcome = await runCallerTurn(this.client, this.systemPrompt(), SCREENER_TOOLS, this.history, voicePrompt, MAX_TURNS);
         this.history = outcome.history;
         if (outcome.terminal !== undefined) {
           console.log(`decision: ${outcome.terminal.kind}`);
@@ -97,6 +265,44 @@ export class RelaySession {
       // interrupt / other frames: ignore
     } catch (err) {
       console.log(`onMessage error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * End a talk-mode (owner) call: say a short goodbye and hang up, then record the call's estimated
+   * cost against the same daily budget the screener draws from (`sumSpendToday`/`overBudget`). No
+   * screener actions apply here — no transfer, no blocklist, no escalation, no voicemail; she IS the
+   * owner, there is nothing to route her to.
+   */
+  private async endOwnerCall(): Promise<void> {
+    if (this.callSid === "") {
+      console.log("endOwnerCall: missing callSid — cannot hang up");
+      return;
+    }
+    const started = this.startedAtMs > 0 ? this.startedAtMs : Date.now();
+    const elapsedSec = Math.max(1, Math.round((Date.now() - started) / 1000));
+    const cost = estimateCallCost("converse", elapsedSec);
+    const transcript = this.history.map((t) => `${t.role}: ${t.content}`).join("\n");
+    const owner = this.env.USER_CELL_E164 ?? "";
+    try {
+      await redirectToHangup(this.env, this.callSid, "Bye — talk soon.");
+    } catch (err) {
+      console.log(`endOwnerCall hangup error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      await recordCall(this.env.DB, {
+        id: crypto.randomUUID(),
+        fromE164: owner,
+        toE164: owner,
+        startedAt: new Date(started).toISOString(),
+        endedAt: new Date().toISOString(),
+        outcomeStage: "talk",
+        verdict: "talk",
+        transcript,
+        costEstimateUsd: cost,
+      });
+    } catch (err) {
+      console.log(`endOwnerCall recordCall error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -116,7 +322,7 @@ export class RelaySession {
     try {
       if (terminal.kind === "connect") {
         await this.alertConnecting(terminal.callerName, terminal.reason);
-        await redirectToDial(this.env, this.callSid, this.env.USER_CELL_E164, this.base);
+        await redirectToDial(this.env, this.callSid, this.base, this.fromE164);
         await recordCall(this.env.DB, {
           id, fromE164: this.fromE164, toE164: this.toE164, startedAt, endedAt,
           outcomeStage: "conversation", verdict: "bridged",
@@ -148,14 +354,14 @@ export class RelaySession {
     }
   }
 
-  /** Real-time "pick up!" text so the owner knows who's being transferred to them. */
+  /** Real-time "pick up!" note so the owner knows who's being transferred to them. */
   private async alertConnecting(callerName: string, reason: string): Promise<void> {
     const who = callerName.trim() !== "" ? callerName.trim() : "a caller";
     const body = reason.trim() !== "" ? `📞 Connecting ${who} — ${reason.trim()}. Pick up!` : `📞 Connecting ${who}. Pick up!`;
     try {
-      await sendSms(this.env, this.env.USER_CELL_E164, body);
+      await notifyOwner(this.env, body);
     } catch {
-      // best-effort — don't fail the transfer on an SMS hiccup
+      // best-effort — don't fail the transfer on a notification hiccup
     }
   }
 
@@ -175,9 +381,9 @@ export class RelaySession {
       costEstimateUsd: args.cost,
     });
     try {
-      await sendSms(this.env, this.env.USER_CELL_E164, body);
+      await notifyOwner(this.env, body);
     } catch (err) {
-      console.log(`sms error: ${err instanceof Error ? err.message : String(err)}`);
+      console.log(`notify error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

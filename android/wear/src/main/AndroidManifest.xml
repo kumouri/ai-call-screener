@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- ACTIVITY_RECOGNITION is all this module needs: it powers the UserActivityInfo stream
+         (asleep / passive / active-exercise) that the whole thing exists for.
+         
+         BODY_SENSORS / BODY_SENSORS_BACKGROUND are deliberately NOT declared. They only ever covered
+         heart rate, which this module discards (the phone already reads wrist HR out of Health
+         Connect — forwarding it here would duplicate every beat under two ids). And on Android 16
+         (targetSdk 36) BODY_SENSORS is no longer grantable at all; the platform replaced it with
+         android.permission.health.READ_HEART_RATE. Declaring it bought nothing and broke the
+         permission check. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- Presence signal's on-wrist haptic (margo/docs/presence-signal-spec.md). A normal
+         permission, never runtime-gated. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- PresenceHoldKeeper (2026-10-06) holds a partial wake lock while a felt hold runs, so its
+         re-issue after a cancel (screen-off, a higher-importance vibration) is never late — a
+         Handler delay does not advance while the CPU sleeps. Bounded by the hold's own expiry. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- PresenceHoldService (2026-09-18): a genuine foreground service, so an active hold survives
+         backgrounding the way a bare WearableListenerService callback never could — the fix for her
+         "it doesn't seem to last long on my watch" report. FOREGROUND_SERVICE_SPECIAL_USE is the
+         Android 14+ door for a foreground service that isn't dataSync/mediaPlayback/etc — a
+         continuous on-wrist haptic signal fits none of the named buckets. POST_NOTIFICATIONS is
+         what lets the ongoing notification (and its OngoingActivity chip) actually show; the
+         service starts either way. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <uses-library
+            android:name="com.google.android.wearable"
+            android:required="true" />
+
+        <!-- Standalone: the watch app is useful on its own terms and doesn't require the phone app to
+             be installed to launch. It does require it to DELIVER anything, since the phone owns the
+             tailnet credentials — that's a runtime condition, not an install-time one. -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Health Services binds this directly; it must be exported and permission-guarded so only
+             the platform can start it. -->
+        <service
+            android:name=".WristListenerService"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING">
+            <intent-filter>
+                <action android:name="hs.passivemonitoring.DATA" />
+            </intent-filter>
+        </service>
+
+        <!-- The phone -> watch half of the presence signal relay (WatchBridge in :app). Exported +
+             BIND_LISTENER-filtered is how Play Services binds it, mirroring WearListenerService on
+             the phone side. A narrower pathPrefix than the phone's own "/margo" — this module has
+             no other message-received service yet to share the namespace with. -->
+        <service
+            android:name=".PresenceSignalListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/margo/presence-signal" />
+            </intent-filter>
+        </service>
+
+        <!-- An active hold's foreground promotion (see the permission comments above + the class's
+             own docstring). Not exported — only PresenceSignalListenerService (this app) starts it. -->
+        <service
+            android:name=".PresenceHoldService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="presence-signal-hold" />
+        </service>
+
+    </application>
+</manifest>

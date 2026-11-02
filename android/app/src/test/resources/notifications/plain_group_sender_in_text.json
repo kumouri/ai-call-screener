@@ -1,0 +1,10 @@
+{
+  "android.title": "Family",
+  "android.text": "Mom: call me when you land",
+  "android.bigText": "Mom: call me when you land, no rush",
+  "android.isGroupConversation": true,
+  "category": "msg",
+  "when": 1789520000000,
+  "postTime": 1789520000500,
+  "flags": 0
+}

@@ -5,6 +5,8 @@
  *   setup    — once, with the callSid and call metadata
  *   prompt   — a chunk of transcribed caller speech (voicePrompt)
  *   interrupt— the caller barged in over our TTS
+ *   dtmf     — a key press (`digit`), sent only when the TwiML sets `dtmfDetection="true"`
+ *              (an alert call's press-1 acknowledgement, `./alert.ts`)
  *
  * Outbound (us -> Twilio):
  *   text     — a token of the assistant's reply; `last: true` ends the turn
@@ -30,10 +32,16 @@ export interface InterruptMessage {
   utteranceUntilInterrupt?: string;
 }
 
+export interface DtmfMessage {
+  type: "dtmf";
+  digit: string;
+}
+
 export type InboundMessage =
   | SetupMessage
   | PromptMessage
   | InterruptMessage
+  | DtmfMessage
   | { type: string; [key: string]: unknown };
 
 export interface TextMessage {

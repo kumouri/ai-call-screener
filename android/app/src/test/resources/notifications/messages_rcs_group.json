@@ -1,0 +1,17 @@
+{
+  "android.title": "Climbing crew",
+  "android.text": "Jo: I can drive",
+  "android.conversationTitle": "Climbing crew",
+  "android.isGroupConversation": true,
+  "android.selfDisplayName": "Ceryce",
+  "android.messages": [
+    {"text": "who's driving saturday", "time": 1789516000000, "sender": "Sam"},
+    {"text": "not me, car's in the shop", "time": 1789516030000, "sender": "Ceryce"},
+    {"text": "I can drive", "time": 1789516090000, "sender": "Jo"},
+    {"text": "📷 Photo", "time": 1789516120000, "sender": "Jo"}
+  ],
+  "category": "msg",
+  "when": 1789516120000,
+  "postTime": 1789516120300,
+  "flags": 16
+}

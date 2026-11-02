@@ -11,6 +11,8 @@ export interface Env {
   RELAY_SESSION: DurableObjectNamespace;
   /** Escalating "call me until I answer" reminder loop (one DO instance per escalation id). */
   CALL_ESCALATION: DurableObjectNamespace;
+  /** Margo's Telegram intake buffer + the daemon's held stream (`telegram/intake.ts`; one instance). */
+  TELEGRAM_INTAKE: DurableObjectNamespace;
 
   // --- secrets ---
   ANTHROPIC_API_KEY: string;
@@ -39,6 +41,21 @@ export interface Env {
   BLOCKLIST_SYNC_SECRET?: string;
   /** Bearer secret Margo's local push_call.py must present to POST /push-call. */
   PUSH_CALL_SECRET?: string;
+
+  // --- Telegram (secrets) — owner notifications go here when both are set; SMS otherwise ---
+  /** Margo's bot token (the same bot the daemon uses). */
+  TELEGRAM_BOT_TOKEN?: string;
+  /** Ceryce's chat id with the bot. */
+  TELEGRAM_CHAT_ID?: string;
+  /** Optional private-chat topic (`message_thread_id`) to file notifications under. */
+  TELEGRAM_THREAD_ID?: string;
+  /** Optional Bot API base override (proxy / test harness only). */
+  TELEGRAM_API_BASE?: string;
+  /** Telegram's `X-Telegram-Bot-Api-Secret-Token` for `POST /telegram-webhook` (the `secret_token`
+   * given to setWebhook). Unset ⇒ the webhook refuses everything. */
+  TELEGRAM_WEBHOOK_SECRET?: string;
+  /** Bearer the daemon presents on `/telegram-stream`, `/telegram-ack`, `/telegram-intake-status`. */
+  TELEGRAM_INTAKE_TOKEN?: string;
 }
 
 export function settingsFromEnv(env: Env): ScreenerSettings {

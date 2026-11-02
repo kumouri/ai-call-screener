@@ -1,0 +1,15 @@
+{
+  "android.title": "Alex Rivera",
+  "android.text": "running 10 late, save me a seat",
+  "android.selfDisplayName": "Me",
+  "android.isGroupConversation": false,
+  "android.messages": [
+    {"text": "are we still on for tonight?", "time": 1789516000000, "sender": "Alex Rivera"},
+    {"text": "yes! 7 at the usual place", "time": 1789516060000},
+    {"text": "running 10 late, save me a seat", "time": 1789518000000, "sender": "Alex Rivera"}
+  ],
+  "category": "msg",
+  "when": 1789518000000,
+  "postTime": 1789518000400,
+  "flags": 16
+}

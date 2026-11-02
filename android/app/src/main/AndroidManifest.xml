@@ -1,18 +1,105 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Reference manifest. In your Android Studio project, the generated manifest
-  already has <application> with MainActivity — just MERGE IN the two highlighted
-  pieces: the INTERNET permission, and the <service> block. The service MUST
-  require BIND_SCREENING_SERVICE and declare the CallScreeningService intent
-  filter, or Android won't offer the role.
+  Margo Call Shield manifest. The application package/namespace is set in
+  app/build.gradle.kts (namespace = "com.kumouri.margo"), not here.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- MERGE IN: needed to sync the blocklist -->
+    <!-- Sync the blocklist + POST the health feed. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The Samsung-export ship (ExportWatchWorker) runs as a FOREGROUND worker while it zips and
+         uploads, since 2026-09-12 22:47: as plain background work the Android 14/15 freezer killed
+         the process mid-zip the moment Ceryce left the app ("excessive binder traffic during
+         cached"). Android 14+ requires the type-specific permission beside the generic one, and
+         POST_NOTIFICATIONS (Android 13+) is what lets the "Shipping Samsung Health export…"
+         notification actually show; the service runs either way. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Health Connect read permissions for the health feed (HealthSyncWorker).
+         READ_HEALTH_DATA_IN_BACKGROUND lets the periodic sync run without the app open;
+         without it the sync only runs while the app is foregrounded / on-demand. -->
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <!-- Workouts (ExerciseSessionRecord) + their calories/distance, which Health Connect stores as
+         separate records over the same interval, and meals (NutritionRecord). -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_NUTRITION" />
+    <!-- T2's widened set. These were MISSING from the manifest when T2 widened READ_PERMISSIONS,
+         which would have been fatal rather than merely incomplete: Health Connect cannot grant a
+         permission the app never declared, so `granted.containsAll(READ_PERMISSIONS)` could never
+         be true, so doWork returned early every run and the feed shipped NOTHING — not even the
+         sync_report that exists to explain a dead feed. Exactly the silent death T2 was written to
+         end. Strings taken from connect-client's own constants, not from memory. -->
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <uses-permission android:name="android.permission.health.READ_BODY_FAT" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_HYDRATION" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+
+    <!-- Presence feed (Phase 1): geofence-based location. FINE is requested in-app; BACKGROUND
+         ("all the time") is granted in Settings so geofences fire while the app is closed. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Activity Recognition (Phase 2): still / walking / driving, for the "don't nudge while driving" gate. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Text-message feed (margo/docs/sms-ingest-spec.md, Phase 1). RECEIVE_SMS is the live edge
+         (SmsReceiver on SMS_RECEIVED); READ_SMS is the backfill over content://sms, inbox + sent.
+         NEITHER makes this the default SMS app, and it never becomes one: receiving and reading are
+         open to any app holding these; only sending / writing the provider are default-app-gated.
+         Play would refuse these to a non-default app — this is a sideloaded build and always has
+         been. Both are runtime permissions, requested from the Access tab, and the feed ALSO needs
+         its own Settings switch (default off) before a single text is read. READ_PHONE_STATE is
+         deliberately NOT declared — nothing here needs the phone's own number or the SIM state. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+
+    <!-- Presence signal ("I'm here" ping/hold, margo/docs/presence-signal-spec.md). A normal
+         permission — VIBRATE has never been runtime-gated on any API level this app targets. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- The presence signal's PUSH link (2026-10-06, Ceryce's ruling "push, not polling";
+         margo/docs/presence-signal-spec.md §3-§5): PresenceLinkService is one always-on foreground
+         service holding the stream the desktop pushes down. specialUse, not dataSync: dataSync is
+         capped at 6 h a day from Android 15 and refused from BOOT_COMPLETED, and a held "Margo can
+         reach you" link fits none of the named types. WAKE_LOCK keeps the CPU up while a pushed
+         event is applied and while a hold's keeper re-issues its rhythm; ACCESS_NETWORK_STATE is the
+         network-back callback that reconnects at once; REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is the
+         Settings card's "unrestricted battery" prompt (sideloaded build, no Play policy at issue). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Discover + deep-link to the Health Connect app. -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
+    <!-- usesCleartextTraffic: the health + presence feeds POST over plain HTTP to Ceryce's own
+         desktop listener on the LAN/tailnet (a private IP). Without this, targetSdk 36 blocks the
+         request and the events silently buffer. The blocklist sync is HTTPS and unaffected. -->
+    <!-- allowBackup=false since 2026-08-12, when the bearer tokens moved from BuildConfig (compiled
+         in, never on disk) into SharedPreferences so they could be typed rather than built. That made
+         them backup-eligible: Android's auto-backup would have carried a live ingest credential off
+         the device to Google's servers and restored it onto any future one. The settings are cheap to
+         re-enter and the token is not something to spread. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -28,7 +115,8 @@
             </intent-filter>
         </activity>
 
-        <!-- MERGE IN: the call-screening service -->
+        <!-- The call-screening service. MUST require BIND_SCREENING_SERVICE and declare the
+             CallScreeningService intent filter, or Android won't offer the role. -->
         <service
             android:name=".CallScreeningServiceImpl"
             android:permission="android.permission.BIND_SCREENING_SERVICE"
@@ -37,5 +125,101 @@
                 <action android:name="android.telecom.CallScreeningService" />
             </intent-filter>
         </service>
+
+        <!-- Health Connect opens this "why do you need my data" rationale from its permission
+             dialog. Both the pre-14 and the Android-14+ intents route to MainActivity. -->
+        <activity-alias
+            android:name=".HealthPermissionsRationale"
+            android:exported="true"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Presence: geofence enter/exit callbacks, and re-register geofences after a reboot. -->
+        <receiver
+            android:name=".GeofenceBroadcastReceiver"
+            android:exported="false" />
+        <!-- Presence: activity-transition callbacks (still/walking/driving). -->
+        <receiver
+            android:name=".ActivityTransitionReceiver"
+            android:exported="false" />
+        <!-- Presence: Sleep API callbacks (sleep/wake). -->
+        <receiver
+            android:name=".SleepReceiver"
+            android:exported="false" />
+        <!-- Text feed: the post-delivery SMS_RECEIVED broadcast (never SMS_DELIVER — that filter is
+             what offers to be the messaging app). Exported so the system can deliver it; the
+             BROADCAST_SMS permission on the receiver means only the system CAN. -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+        <!-- Text feed, Phase 2 (margo/docs/sms-ingest-spec.md §6): reads incoming messages off
+             allowlisted messaging apps' notifications — the only door RCS opens. Bound by the system
+             only after Ceryce grants Notification access on the system Settings page; the
+             BIND_NOTIFICATION_LISTENER_SERVICE permission means only the system CAN bind it. Reads
+             only — never dismisses, snoozes or replies. Gated in code on the same Text messages
+             switch as SmsReceiver. -->
+        <service
+            android:name=".MessageNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- An app update kills the push link; this brings it straight back. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- WorkManager's own foreground service, which ExportWatchWorker's setForeground() runs in.
+             Android 14+ (targetSdk 36) refuses to start a foreground service whose type is not
+             declared on the service, and the library's manifest declares none — so the type is
+             merged in here, per the AndroidX "Support for long-running workers" guide. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- T3: receives wrist events from the :wear module over the Data Layer and forwards them to
+             the desktop. Exported + BIND_LISTENER-filtered is how Play Services binds it. -->
+        <service
+            android:name=".WearListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/margo" />
+            </intent-filter>
+        </service>
+
+        <!-- The presence signal's push link + hold chrome (see the permission block above). Not
+             exported — only this app starts it. Replaces PresenceSignalService and the idle poll
+             worker, both removed 2026-10-06. -->
+        <service
+            android:name=".PresenceLinkService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="presence-signal-push-link" />
+        </service>
+
     </application>
 </manifest>

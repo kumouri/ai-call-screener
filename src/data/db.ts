@@ -27,6 +27,45 @@ export async function addToBlocklist(db: D1Database, fromE164: string, reason: s
     .run();
 }
 
+/** Wrong-key gate failures before a number is blocklisted. Two, not one — humans fumble keypads. */
+export const GATE_FAIL_BLOCK_AFTER = 2;
+
+/**
+ * Learning loop for the free tier (the M4 gate-fail escalation): log a press-1
+ * gate failure and escalate to the blocklist — rejected for $0 at stage 2 from
+ * then on, and served to the on-device blocker via GET /blocklist. How fast
+ * depends on HOW they failed: a **silent timeout** (pressed nothing at all)
+ * blocklists on the FIRST strike — humans mash keys, only robots say nothing —
+ * while a **wrong key** gets GATE_FAIL_BLOCK_AFTER strikes of grace. Anonymous
+ * callers can't be counted; allowlisted contacts are never counted
+ * (contacts-sync lag shouldn't blocklist a friend on a bad speakerphone day).
+ * Returns the running count.
+ */
+export async function recordGateFail(db: D1Database, fromE164: string, toE164: string, silent: boolean): Promise<number> {
+  if (fromE164 === "") return 0;
+  const allowed = await db.prepare("SELECT 1 FROM contacts WHERE number_e164 = ? LIMIT 1").bind(fromE164).first();
+  if (allowed !== null) return 0;
+  const now = new Date().toISOString();
+  await recordCall(db, {
+    id: crypto.randomUUID(),
+    fromE164,
+    toE164,
+    startedAt: now,
+    endedAt: now,
+    outcomeStage: "gate_fail",
+    verdict: "gate_fail",
+    reason: silent ? "silent_timeout" : "wrong_key",
+    costEstimateUsd: 0,
+  });
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM calls WHERE from_e164 = ?1 AND outcome_stage = 'gate_fail'")
+    .bind(fromE164)
+    .first<{ n: number }>();
+  const failures = row?.n ?? 1;
+  if (silent || failures >= GATE_FAIL_BLOCK_AFTER) await addToBlocklist(db, fromE164, "gate_fail");
+  return failures;
+}
+
 export interface CallRecord {
   id: string;
   fromE164: string;
@@ -62,6 +101,20 @@ export async function recordCall(db: D1Database, rec: CallRecord): Promise<void>
       rec.costEstimateUsd,
     )
     .run();
+}
+
+/**
+ * Sum of `cost_estimate_usd` for calls started today (UTC) — the daily-budget guard's read
+ * (`DAILY_BUDGET_USD`, `budget.ts::overBudget`). Talk-mode calls share this budget with screened
+ * inbound calls: both spend real Twilio + Claude minutes against the same daily cap.
+ */
+export async function sumSpendToday(db: D1Database): Promise<number> {
+  const todayPrefix = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  const row = await db
+    .prepare("SELECT COALESCE(SUM(cost_estimate_usd), 0) AS total FROM calls WHERE started_at LIKE ?1")
+    .bind(`${todayPrefix}%`)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
 }
 
 /**

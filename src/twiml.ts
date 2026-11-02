@@ -6,6 +6,11 @@
 
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8"?>';
 
+/** `https://` -> `wss://` (and `http://` -> `ws://`) for a ConversationRelay WebSocket URL. */
+export function wssOf(base: string): string {
+  return base.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
+}
+
 /** Escape a string for safe inclusion in XML text / attribute values. */
 export function escapeXml(s: string): string {
   return s
@@ -64,9 +69,31 @@ export function reject(reason: "rejected" | "busy" = "rejected"): string {
   return doc(`<Reject reason="${reason}" />`);
 }
 
-/** Speak a message, optionally hanging up afterward. */
-export function say(message: string, opts: { hangup?: boolean } = {}): string {
-  return doc(`<Say>${escapeXml(message)}</Say>${opts.hangup ? "<Hangup />" : ""}`);
+/**
+ * The `<Say voice="…">` value for a persona: Twilio's third-party-provider form is
+ * `<Provider>.<voiceId>` (e.g. `ElevenLabs.pFZP5JQG7iQjIQuC4Bku` — ElevenLabs in
+ * `<Say>` is public beta since 2026-09-09). Undefined when the persona names no
+ * provider+voice pair, so `say()` falls back to a bare `<Say>` (Twilio's default
+ * voice). The persona file stays the single source of the id — nothing here
+ * hardcodes a second one.
+ */
+export function sayVoiceOf(persona: { ttsProvider?: string; voice?: string }): string | undefined {
+  if (persona.ttsProvider === undefined || persona.voice === undefined) return undefined;
+  return `${persona.ttsProvider}.${persona.voice}`;
+}
+
+function sayTag(text: string, voice?: string): string {
+  const attr = voice !== undefined ? ` voice="${escapeXml(voice)}"` : "";
+  return `<Say${attr}>${escapeXml(text)}</Say>`;
+}
+
+/**
+ * Speak a message, optionally hanging up afterward. `voice` is passed straight
+ * through as the `<Say voice>` attribute (see `sayVoiceOf`); omitted => plain
+ * `<Say>` in Twilio's default voice.
+ */
+export function say(message: string, opts: { hangup?: boolean; voice?: string } = {}): string {
+  return doc(`${sayTag(message, opts.voice)}${opts.hangup ? "<Hangup />" : ""}`);
 }
 
 export interface GateOptions {
@@ -80,13 +107,15 @@ export interface GateOptions {
 /**
  * Press-1 gate. If the caller enters nothing within `timeoutSec`, `<Gather>`
  * falls through to `<Hangup>` — which is exactly how we drop silent robodialers
- * for ~$0.
+ * for ~$0. `actionOnEmptyResult="true"` makes that timeout ALSO POST to the
+ * action URL (with empty Digits) first, so /gate can count the failure toward
+ * the learning blocklist — without it, silent robodialers vanish unrecorded.
  */
 export function gate(opts: GateOptions): string {
   const numDigits = opts.numDigits ?? 1;
   const timeout = opts.timeoutSec ?? 6;
   const gather =
-    `<Gather numDigits="${numDigits}" timeout="${timeout}" action="${escapeXml(opts.actionUrl)}" method="POST">` +
+    `<Gather numDigits="${numDigits}" timeout="${timeout}" action="${escapeXml(opts.actionUrl)}" method="POST" actionOnEmptyResult="true">` +
     `<Say>${escapeXml(opts.prompt)}</Say>` +
     `</Gather>`;
   return doc(`${gather}<Hangup />`);
@@ -100,6 +129,8 @@ export interface EscalationGatherOptions {
   numDigits?: number;
   /** Seconds to wait for a keypress after the prompt before hanging up. */
   timeoutSec?: number;
+  /** `<Say voice>` for the prompt (see `sayVoiceOf`); omitted => Twilio's default voice. */
+  voice?: string;
 }
 
 /**
@@ -107,13 +138,14 @@ export interface EscalationGatherOptions {
  * as `gate()`, but a longer default timeout (she needs a moment to press) and the
  * `<Gather>` wraps the whole `<Say>` so a press *during* the message is captured.
  * On no input, falls through to `<Hangup>` — the Durable Object's alarm calls back.
+ * The digit-ack behaviour is identical with or without a `voice`.
  */
 export function escalationGather(opts: EscalationGatherOptions): string {
   const numDigits = opts.numDigits ?? 1;
   const timeout = opts.timeoutSec ?? 30;
   const gather =
     `<Gather numDigits="${numDigits}" timeout="${timeout}" action="${escapeXml(opts.actionUrl)}" method="POST">` +
-    `<Say>${escapeXml(opts.prompt)}</Say>` +
+    sayTag(opts.prompt, opts.voice) +
     `</Gather>`;
   return doc(`${gather}<Hangup />`);
 }
@@ -129,6 +161,13 @@ export interface ConnectRelayOptions {
   voice?: string;
   /** Comma-separated STT vocabulary hints (e.g. the owner's name) to boost recognition. */
   hints?: string;
+  /**
+   * What may cut the welcome greeting off (`none` | `dtmf` | `speech` | `any`; Twilio's default is
+   * `any`). An alert call sets `none` so her "hello?" on pickup can't swallow the alert itself.
+   */
+  welcomeGreetingInterruptible?: "none" | "dtmf" | "speech" | "any";
+  /** Forward key presses to the WebSocket as `dtmf` frames (an alert call's press-1 ack). */
+  dtmfDetection?: boolean;
 }
 
 /** Hand the answered call to Twilio ConversationRelay (the paid Claude stage). */
@@ -139,9 +178,12 @@ export function connectRelay(opts: ConnectRelayOptions): string {
   const tts = opts.ttsProvider !== undefined ? ` ttsProvider="${escapeXml(opts.ttsProvider)}"` : "";
   const voice = opts.voice !== undefined ? ` voice="${escapeXml(opts.voice)}"` : "";
   const hints = opts.hints !== undefined ? ` hints="${escapeXml(opts.hints)}"` : "";
+  const greetInt =
+    opts.welcomeGreetingInterruptible !== undefined ? ` welcomeGreetingInterruptible="${opts.welcomeGreetingInterruptible}"` : "";
+  const dtmf = opts.dtmfDetection === true ? ` dtmfDetection="true"` : "";
   return doc(
     `<Connect>` +
-      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general"${hints}${tts}${voice}>` +
+      `<ConversationRelay url="${escapeXml(opts.wsUrl)}" welcomeGreeting="${escapeXml(opts.welcomeGreeting)}" transcriptionProvider="Deepgram" speechModel="nova-3-general"${hints}${tts}${voice}${greetInt}${dtmf}>` +
       params +
       `</ConversationRelay>` +
       `</Connect>`,

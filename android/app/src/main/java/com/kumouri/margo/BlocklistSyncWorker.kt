@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -12,6 +13,7 @@ import androidx.work.WorkerParameters
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -23,10 +25,13 @@ class BlocklistSyncWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        // Misconfigured (no endpoint baked in) — fail fast instead of retrying forever.
+        val settings = SettingsStore(applicationContext)
+        if (!settings.blocklistConfigured()) return Result.failure()
         return try {
-            val conn = (URL(BuildConfig.BLOCKLIST_URL).openConnection() as HttpURLConnection).apply {
+            val conn = (URL(settings.blocklistUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                setRequestProperty("Authorization", "Bearer ${BuildConfig.BLOCKLIST_SECRET}")
+                setRequestProperty("Authorization", "Bearer ${settings.blocklistSecret}")
                 connectTimeout = 15_000
                 readTimeout = 15_000
             }
@@ -44,6 +49,7 @@ class BlocklistSyncWorker(context: Context, params: WorkerParameters) :
 
     companion object {
         private const val UNIQUE = "blocklist-sync"
+        private const val UNIQUE_NOW = "blocklist-sync-now"
 
         private fun connectedConstraints() =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -56,11 +62,15 @@ class BlocklistSyncWorker(context: Context, params: WorkerParameters) :
                 .enqueueUniquePeriodicWork(UNIQUE, ExistingPeriodicWorkPolicy.KEEP, request)
         }
 
-        fun syncNow(context: Context) {
+        /** The manual tap: unique + KEEP, so a tap while one is pending is a no-op rather than a
+         *  second identical fetch (HealthSyncWorker.syncNow has the 2026-09-12 story). */
+        fun syncNow(context: Context): UUID {
             val request = OneTimeWorkRequestBuilder<BlocklistSyncWorker>()
                 .setConstraints(connectedConstraints())
                 .build()
-            WorkManager.getInstance(context).enqueue(request)
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(UNIQUE_NOW, ExistingWorkPolicy.KEEP, request)
+            return request.id
         }
     }
 }

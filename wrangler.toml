@@ -1,6 +1,6 @@
 # Cloudflare Workers config for the AI call screener.
-# Secrets (ANTHROPIC_API_KEY, TWILIO_*, USER_CELL_E164, PUBLIC_BASE_URL) are NOT
-# here — set them in .dev.vars (local) or `wrangler secret put NAME` (deployed).
+# Secrets (ANTHROPIC_API_KEY, TWILIO_*, USER_CELL_E164, PUBLIC_BASE_URL, TELEGRAM_*)
+# are NOT here — set them in .dev.vars (local) or `wrangler secret put NAME` (deployed).
 
 name = "ai-call-screener"
 main = "src/index.ts"
@@ -17,6 +17,12 @@ class_name = "RelaySession"
 name = "CALL_ESCALATION"
 class_name = "CallEscalation"
 
+# Durable Object: Margo's Telegram intake by push — buffers each webhook update until the daemon
+# acks it, and holds the daemon's outbound SSE stream (src/telegram/intake.ts).
+[[durable_objects.bindings]]
+name = "TELEGRAM_INTAKE"
+class_name = "TelegramIntake"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RelaySession"]
@@ -24,6 +30,10 @@ new_sqlite_classes = ["RelaySession"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["CallEscalation"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["TelegramIntake"]
 
 # D1 (SQLite): allowlist / blocklist / call log.
 # database_id is filled in during provisioning (M5): `wrangler d1 create call_screener`.

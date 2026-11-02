@@ -4,4 +4,6 @@
     <string name="syncing">Syncing…</string>
     <string name="make_screening_app">Make Margo the screening app</string>
     <string name="sync_now">Sync blocklist now</string>
+    <string name="add_place_here">Save this spot as a place</string>
+    <string name="manage_places">Manage places</string>
 </resources>
