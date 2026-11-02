@@ -29,7 +29,7 @@ describe("placeCall", () => {
       new Response(JSON.stringify({ sid: "CA999" }), { status: 201 }),
     );
 
-    const sid = await placeCall(fakeEnv(), "+15551112222", "Ceryce — it's Margo. Take your meds.");
+    const sid = await placeCall(fakeEnv(), "+15551112222", "Ceryce — it's Margo. Time for your reminder.");
     expect(sid).toBe("CA999");
 
     const call = spy.mock.calls[0]!;
